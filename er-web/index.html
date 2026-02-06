@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>EMTA · Diagrama Entidad-Relación</title>
+    <link rel="stylesheet" href="./assets/styles.css" />
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar__title">
+        <div class="topbar__app">EMTA</div>
+        <div class="topbar__page">Diagrama Entidad-Relación</div>
+      </div>
+      <div class="topbar__actions">
+        <button id="refreshBtn" class="button button--secondary" type="button">Recargar</button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="sidebar__section">
+          <div class="sidebar__label">Buscar tabla</div>
+          <input id="searchInput" class="input" type="search" placeholder="p. ej. persona_mst" />
+        </div>
+
+        <div class="sidebar__section">
+          <div class="sidebar__label">Módulos</div>
+          <div id="modulesList" class="modules"></div>
+        </div>
+
+        <div class="sidebar__section sidebar__muted">
+          <div id="dbMeta" class="meta"></div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <div class="main__header">
+          <h1 id="sectionTitle" class="h1">Vista general</h1>
+          <div class="hint">Haz clic en una tabla dentro del diagrama o la lista para ver columnas y relaciones.</div>
+        </div>
+
+        <section class="panel">
+          <div id="diagram" class="diagram">
+            <div class="diagram__loading">Cargando diagrama…</div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel__header">
+            <h2 class="h2">Tablas</h2>
+          </div>
+          <div id="tablesGrid" class="grid"></div>
+        </section>
+      </main>
+    </div>
+
+    <div id="modal" class="modal" aria-hidden="true">
+      <div class="modal__backdrop" data-close="true"></div>
+      <div class="modal__content" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <div class="modal__header">
+          <div>
+            <div id="modalTitle" class="modal__title"></div>
+            <div id="modalSubtitle" class="modal__subtitle"></div>
+          </div>
+          <button class="button button--secondary" type="button" data-close="true">Cerrar</button>
+        </div>
+        <div class="modal__body">
+          <div class="modal__section">
+            <div class="modal__label">Columnas</div>
+            <div id="modalColumns" class="codeblock"></div>
+          </div>
+          <div class="modal__section">
+            <div class="modal__label">Relaciones (FK)</div>
+            <div id="modalRelations" class="relations"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script src="./assets/app.js"></script>
+  </body>
+</html>
+

@@ -1,0 +1,2689 @@
+{
+    "db": "emta_db",
+    "generated_at": "2026-01-16T19:12:29+00:00",
+    "tables": [
+        {
+            "name": "accion_operativa_cfg",
+            "module": "cfg",
+            "columns_count": 7,
+            "rows_count": 168,
+            "primary_key": [
+                "ac_op-id"
+            ],
+            "columns": [
+                {
+                    "name": "ac_op-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "ac_op-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_op-cod",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_op-descrip",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_op-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_op-orden",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_op-observ",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "accion_set_cfg",
+            "module": "cfg",
+            "columns_count": 7,
+            "rows_count": 11,
+            "primary_key": [
+                "ac_se-id"
+            ],
+            "columns": [
+                {
+                    "name": "ac_se-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "ac_se-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_se-cod",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_se-nombre",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_se-descrip",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_se-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_se-orden",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "accion_set_detalle_canal_cfg",
+            "module": "cfg",
+            "columns_count": 6,
+            "rows_count": 274,
+            "primary_key": [
+                "ac_se_de_ca-id"
+            ],
+            "columns": [
+                {
+                    "name": "ac_se_de_ca-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "ac_se_de_ca-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_se_de_ca-ac_se_de_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_se_de_ca-ca_co_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_se_de_ca-especif_por_fuente",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_se_de_ca-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "accion_set_detalle_cfg",
+            "module": "cfg",
+            "columns_count": 10,
+            "rows_count": 246,
+            "primary_key": [
+                "ac_se_de-id"
+            ],
+            "columns": [
+                {
+                    "name": "ac_se_de-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "ac_se_de-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_se_de-ac_se_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_se_de-fa_ac_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_se_de-rol_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_se_de-ac_op_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_se_de-detalle",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_se_de-ord_ejec",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_se_de-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_se_de-observ",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "activacion_del_plan_trs",
+            "module": "trs",
+            "columns_count": 15,
+            "rows_count": 0,
+            "primary_key": [
+                "ac_de_pl-id"
+            ],
+            "columns": [
+                {
+                    "name": "ac_de_pl-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "ac_de_pl-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_de_pl-ti_em_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_de_pl-rie_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_de_pl-plan_espec",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_de_pl-ni_al_id-fk-inicial",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_de_pl-per_id-fk-activador",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_de_pl-rol_id-fk-activador",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_de_pl-cargo_declarado",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_de_pl-fecha_activac",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_de_pl-hora_activac",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_de_pl-estado",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_de_pl-mensaje_inic",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_de_pl-mensaje_simul",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_de_pl-observ",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "activacion_nivel_hist_trs",
+            "module": "trs",
+            "columns_count": 23,
+            "rows_count": 3,
+            "primary_key": [
+                "ac_ni_hi-id"
+            ],
+            "columns": [
+                {
+                    "name": "ac_ni_hi-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "ac_ni_hi-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_ni_hi-ac_de_pl_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_ni_hi-ni_al_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_ni_hi-ac_se_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_ni_hi-fech_ini",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_ni_hi-hora_fin",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_ni_hi-hora_ini",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_ni_hi-fech_fin",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_ni_hi-nivel_inicial",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_ni_hi-motivo_cambio",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_ni_hi-per_id-fk-registrador",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_ni_hi-rol_id-fk-registrador",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_ni_hi-fuente_cambio",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_ni_hi-observ",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_ni_hi-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_ni_hi-orden",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_ni_hi-cr_ri_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_ni_hi-valores_parametros",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_ni_hi-ni_al_id-fk-declarado",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_ni_hi-fuente_decision",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_ni_hi-justificacion",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ac_ni_hi-info_adicional",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "asignacion_en_funciones_trs",
+            "module": "trs",
+            "columns_count": 11,
+            "rows_count": 1,
+            "primary_key": [
+                "as_en_fu-id"
+            ],
+            "columns": [
+                {
+                    "name": "as_en_fu-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "as_en_fu-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "as_en_fu-ac_de_pl_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "as_en_fu-gr_op_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "as_en_fu-per_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "as_en_fu-tipo_asignacion",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "as_en_fu-per_id-fk-delegador",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "as_en_fu-motivo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "as_en_fu-ts_ini",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "as_en_fu-ts_fin",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "as_en_fu-estado",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "cache",
+            "module": "system",
+            "columns_count": 3,
+            "rows_count": 0,
+            "primary_key": [
+                "key"
+            ],
+            "columns": [
+                {
+                    "name": "key",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "value",
+                    "type": "mediumtext",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "expiration",
+                    "type": "int",
+                    "nullable": false,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "cache_locks",
+            "module": "system",
+            "columns_count": 3,
+            "rows_count": 0,
+            "primary_key": [
+                "key"
+            ],
+            "columns": [
+                {
+                    "name": "key",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "owner",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "expiration",
+                    "type": "int",
+                    "nullable": false,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "canal_comunicacion_cat",
+            "module": "cat",
+            "columns_count": 7,
+            "rows_count": 4,
+            "primary_key": [
+                "ca_co-id"
+            ],
+            "columns": [
+                {
+                    "name": "ca_co-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "ca_co-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ca_co-cod",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ca_co-nombre",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ca_co-prioridad",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ca_co-descrip",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ca_co-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "criterio_riesgo_cfg",
+            "module": "cfg",
+            "columns_count": 24,
+            "rows_count": 11,
+            "primary_key": [
+                "cr_ri-id"
+            ],
+            "columns": [
+                {
+                    "name": "cr_ri-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "cr_ri-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-rie_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-cod",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-descrip",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-tipo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-variable",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-operador",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-valor_umbral",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-und",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-cond_temp",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-fuente",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-refer_documental",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-ni_al_id-fk-sugerido",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-observ",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-orden",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-disparador",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-valor_tipo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-valor_num",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-valor_num_hasta",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-valor_bool",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-do_en_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_ri-valor_texto",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "cronologia_emergencia_trs",
+            "module": "trs",
+            "columns_count": 10,
+            "rows_count": 1,
+            "primary_key": [
+                "cr_em-id"
+            ],
+            "columns": [
+                {
+                    "name": "cr_em-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "cr_em-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_em-ac_de_pl_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_em-tipo_emergencia",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_em-ts_emergencia",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_em-per_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_em-gr_op_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_em-detalle",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_em-ref_tabla",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cr_em-referencia",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "dominio_enum_cat",
+            "module": "cat",
+            "columns_count": 8,
+            "rows_count": 8,
+            "primary_key": [
+                "do_en-id"
+            ],
+            "columns": [
+                {
+                    "name": "do_en-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "do_en-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "do_en-dominio",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "do_en-cod",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "do_en-etiqueta",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "do_en-orden",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "do_en-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "do_en-observ",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "ejecucion_accion_trs",
+            "module": "trs",
+            "columns_count": 10,
+            "rows_count": 1,
+            "primary_key": [
+                "ej_ac-id"
+            ],
+            "columns": [
+                {
+                    "name": "ej_ac-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "ej_ac-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ej_ac-ac_de_pl_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ej_ac-gr_op_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ej_ac-ac_se_de_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ej_ac-as_en_fu_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ej_ac-estado",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ej_ac-ts_ini",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ej_ac-ts_fin",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ej_ac-observ",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "ev_lugar_contacto_mst",
+            "module": "mst",
+            "columns_count": 6,
+            "rows_count": 25,
+            "primary_key": [
+                "ev_lu_con-id"
+            ],
+            "columns": [
+                {
+                    "name": "ev_lu_con-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "ev_lu_con-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ev_lu_con-ev_lu_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ev_lu_con-tipo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ev_lu_con-valor",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ev_lu_con-nota",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "ev_lugar_coordenada_mst",
+            "module": "mst",
+            "columns_count": 6,
+            "rows_count": 38,
+            "primary_key": [
+                "ev_lu_coo-id"
+            ],
+            "columns": [
+                {
+                    "name": "ev_lu_coo-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "ev_lu_coo-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ev_lu_coo-ev_lu_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ev_lu_coo-srid",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ev_lu_coo-este",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ev_lu_coo-norte",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "ev_lugar_mst",
+            "module": "mst",
+            "columns_count": 7,
+            "rows_count": 38,
+            "primary_key": [
+                "ev_lu-id"
+            ],
+            "columns": [
+                {
+                    "name": "ev_lu-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "ev_lu-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ev_lu-cod",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ev_lu-nombre",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ev_lu-direccion",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ev_lu-lu_ti_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ev_lu-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "failed_jobs",
+            "module": "system",
+            "columns_count": 7,
+            "rows_count": 0,
+            "primary_key": [
+                "id"
+            ],
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "bigint",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "uuid",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "UNI"
+                },
+                {
+                    "name": "connection",
+                    "type": "text",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "queue",
+                    "type": "text",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "payload",
+                    "type": "longtext",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "exception",
+                    "type": "longtext",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "failed_at",
+                    "type": "timestamp",
+                    "nullable": false,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "fase_activacion_cat",
+            "module": "cat",
+            "columns_count": 6,
+            "rows_count": 3,
+            "primary_key": [
+                "fa_ac-id"
+            ],
+            "columns": [
+                {
+                    "name": "fa_ac-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "fa_ac-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "fa_ac-cod",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "fa_ac-nombre",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "fa_ac-orden",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "fa_ac-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "grupo_operativo_cat",
+            "module": "cat",
+            "columns_count": 7,
+            "rows_count": 8,
+            "primary_key": [
+                "gr_op-id"
+            ],
+            "columns": [
+                {
+                    "name": "gr_op-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "gr_op-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "gr_op-cod",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "gr_op-nombre",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "gr_op-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "gr_op-ord_vis",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "gr_op-correl",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "jobs",
+            "module": "system",
+            "columns_count": 7,
+            "rows_count": 0,
+            "primary_key": [
+                "id"
+            ],
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "bigint",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "queue",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "MUL"
+                },
+                {
+                    "name": "payload",
+                    "type": "longtext",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "attempts",
+                    "type": "tinyint",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "reserved_at",
+                    "type": "int",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "available_at",
+                    "type": "int",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "created_at",
+                    "type": "int",
+                    "nullable": false,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "job_batches",
+            "module": "system",
+            "columns_count": 10,
+            "rows_count": 0,
+            "primary_key": [
+                "id"
+            ],
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "name",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "total_jobs",
+                    "type": "int",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "pending_jobs",
+                    "type": "int",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "failed_jobs",
+                    "type": "int",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "failed_job_ids",
+                    "type": "longtext",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "options",
+                    "type": "mediumtext",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "cancelled_at",
+                    "type": "int",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "created_at",
+                    "type": "int",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "finished_at",
+                    "type": "int",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "lugar_tipo_cat",
+            "module": "cat",
+            "columns_count": 4,
+            "rows_count": 14,
+            "primary_key": [
+                "lu_ti-id"
+            ],
+            "columns": [
+                {
+                    "name": "lu_ti-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "lu_ti-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "lu_ti-cod",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "lu_ti-nombre",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "migrations",
+            "module": "system",
+            "columns_count": 3,
+            "rows_count": 8,
+            "primary_key": [
+                "id"
+            ],
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "int",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "migration",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "batch",
+                    "type": "int",
+                    "nullable": false,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "nivel_alerta_cat",
+            "module": "cat",
+            "columns_count": 8,
+            "rows_count": 5,
+            "primary_key": [
+                "ni_al-id"
+            ],
+            "columns": [
+                {
+                    "name": "ni_al-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "ni_al-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ni_al-cod",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ni_al-nombre",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ni_al-ni_em_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ni_al-descrip",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ni_al-orden",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ni_al-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "nivel_emergencia_cat",
+            "module": "cat",
+            "columns_count": 8,
+            "rows_count": 4,
+            "primary_key": [
+                "ni_em-id"
+            ],
+            "columns": [
+                {
+                    "name": "ni_em-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "ni_em-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ni_em-cod",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ni_em-nombre",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ni_em-descrip",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ni_em-activa_plan",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ni_em-orden",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ni_em-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "notas_operativas_trs",
+            "module": "trs",
+            "columns_count": 8,
+            "rows_count": 1,
+            "primary_key": [
+                "no_op-id"
+            ],
+            "columns": [
+                {
+                    "name": "no_op-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "no_op-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "no_op-ac_de_pl_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "no_op-gr_op_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "no_op-per_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "no_op-ts_nota",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "no_op-texto",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "no_op-visibilidad",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "notificacion_confirmacion_trs",
+            "module": "trs",
+            "columns_count": 6,
+            "rows_count": 1,
+            "primary_key": [
+                "no_co-id"
+            ],
+            "columns": [
+                {
+                    "name": "no_co-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "no_co-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "no_co-no_en_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "no_co-confirmado",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "no_co-ts",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "no_co-respuesta",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "notificacion_envio_trs",
+            "module": "trs",
+            "columns_count": 11,
+            "rows_count": 1,
+            "primary_key": [
+                "no_en-id"
+            ],
+            "columns": [
+                {
+                    "name": "no_en-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "no_en-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "no_en-ac_de_pl_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "no_en-per_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "no_en-gr_op_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "no_en-rol_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "no_en-ca_co_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "no_en-mensaje",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "no_en-ts",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "no_en-estado",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "no_en-num_de_intento",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "password_reset_tokens",
+            "module": "system",
+            "columns_count": 3,
+            "rows_count": 0,
+            "primary_key": [
+                "email"
+            ],
+            "columns": [
+                {
+                    "name": "email",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "token",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "personal_access_tokens",
+            "module": "system",
+            "columns_count": 10,
+            "rows_count": 15,
+            "primary_key": [
+                "id"
+            ],
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "bigint",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "tokenable_type",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "MUL"
+                },
+                {
+                    "name": "tokenable_id",
+                    "type": "bigint",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "name",
+                    "type": "text",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "token",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "UNI"
+                },
+                {
+                    "name": "abilities",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "last_used_at",
+                    "type": "timestamp",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "expires_at",
+                    "type": "timestamp",
+                    "nullable": true,
+                    "key": "MUL"
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "persona_mst",
+            "module": "mst",
+            "columns_count": 11,
+            "rows_count": 18,
+            "primary_key": [
+                "per-id"
+            ],
+            "columns": [
+                {
+                    "name": "per-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "per-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "per-nom_data_orig",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "per-nombre",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "per-apellido_1",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "per-apellido_2",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "per-num_doc",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "per-email",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "per-tel_mov",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "per-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "per-correl",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "persona_rol_cfg",
+            "module": "cfg",
+            "columns_count": 8,
+            "rows_count": 25,
+            "primary_key": [
+                "pe_ro-id"
+            ],
+            "columns": [
+                {
+                    "name": "pe_ro-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "pe_ro-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "pe_ro-per_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "pe_ro-rol_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "pe_ro-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "pe_ro-fech_ini",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "pe_ro-fech_fin",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "pe_ro-observ",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "persona_rol_grupo_cfg",
+            "module": "cfg",
+            "columns_count": 11,
+            "rows_count": 25,
+            "primary_key": [
+                "pe_ro_gr-id"
+            ],
+            "columns": [
+                {
+                    "name": "pe_ro_gr-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "pe_ro_gr-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "pe_ro_gr-per_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "pe_ro_gr-rol_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "pe_ro_gr-gr_op_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "pe_ro_gr-tipo_asignacion",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "pe_ro_gr-orden_sust",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "pe_ro_gr-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "pe_ro_gr-fech_ini",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "pe_ro_gr-fech_fin",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "pe_ro_gr-observ",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "riesgo_cat",
+            "module": "cat",
+            "columns_count": 10,
+            "rows_count": 9,
+            "primary_key": [
+                "rie-id"
+            ],
+            "columns": [
+                {
+                    "name": "rie-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "rie-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "rie-cod",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "rie-nombre",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "rie-ti_ri_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "rie-descrip",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "rie-evaluac",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "rie-plan_espec",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "rie-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "rie-orden",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "riesgo_nivel_accion_set_cfg",
+            "module": "cfg",
+            "columns_count": 8,
+            "rows_count": 18,
+            "primary_key": [
+                "ri_ni_ac_se-id"
+            ],
+            "columns": [
+                {
+                    "name": "ri_ni_ac_se-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "ri_ni_ac_se-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ri_ni_ac_se-rie_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ri_ni_ac_se-ni_al_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ri_ni_ac_se-ac_se_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ri_ni_ac_se-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ri_ni_ac_se-prioridad",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ri_ni_ac_se-observ",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "rol_cat",
+            "module": "cat",
+            "columns_count": 7,
+            "rows_count": 14,
+            "primary_key": [
+                "rol-id"
+            ],
+            "columns": [
+                {
+                    "name": "rol-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "rol-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "rol-cod",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "rol-nombre",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "rol-descrip",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "rol-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "rol-correl",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "sessions",
+            "module": "system",
+            "columns_count": 6,
+            "rows_count": 0,
+            "primary_key": [
+                "id"
+            ],
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "user_id",
+                    "type": "bigint",
+                    "nullable": true,
+                    "key": "MUL"
+                },
+                {
+                    "name": "ip_address",
+                    "type": "varchar",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "user_agent",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "payload",
+                    "type": "longtext",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "last_activity",
+                    "type": "int",
+                    "nullable": false,
+                    "key": "MUL"
+                }
+            ]
+        },
+        {
+            "name": "tenants",
+            "module": "system",
+            "columns_count": 5,
+            "rows_count": 1,
+            "primary_key": [
+                "tenant_id"
+            ],
+            "columns": [
+                {
+                    "name": "tenant_id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "name",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "default_language",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "tenant_languages",
+            "module": "system",
+            "columns_count": 6,
+            "rows_count": 3,
+            "primary_key": [
+                "id"
+            ],
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "bigint",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "tenant_id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "MUL"
+                },
+                {
+                    "name": "language_code",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "is_active",
+                    "type": "tinyint",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "tipo_emergencia_cat",
+            "module": "cat",
+            "columns_count": 7,
+            "rows_count": 2,
+            "primary_key": [
+                "ti_em-id"
+            ],
+            "columns": [
+                {
+                    "name": "ti_em-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "ti_em-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ti_em-cod",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ti_em-nombre",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ti_em-descrip",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ti_em-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ti_em-orden",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "tipo_riesgo_cat",
+            "module": "cat",
+            "columns_count": 7,
+            "rows_count": 2,
+            "primary_key": [
+                "ti_ri-id"
+            ],
+            "columns": [
+                {
+                    "name": "ti_ri-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "ti_ri-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ti_ri-cod",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ti_ri-nombre",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ti_ri-descrip",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ti_ri-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ti_ri-orden",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "tipo_riesgo_nivel_accion_set_cfg",
+            "module": "cfg",
+            "columns_count": 8,
+            "rows_count": 4,
+            "primary_key": [
+                "ti_ri_ni_ac_se-id"
+            ],
+            "columns": [
+                {
+                    "name": "ti_ri_ni_ac_se-id",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "ti_ri_ni_ac_se-tenant_id",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ti_ri_ni_ac_se-ti_ri_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ti_ri_ni_ac_se-ni_al_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ti_ri_ni_ac_se-ac_se_id-fk",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ti_ri_ni_ac_se-activo",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ti_ri_ni_ac_se-orden",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "ti_ri_ni_ac_se-observ",
+                    "type": "text",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        },
+        {
+            "name": "users",
+            "module": "system",
+            "columns_count": 10,
+            "rows_count": 1,
+            "primary_key": [
+                "id"
+            ],
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "bigint",
+                    "nullable": false,
+                    "key": "PRI"
+                },
+                {
+                    "name": "tenant_id",
+                    "type": "varchar",
+                    "nullable": true,
+                    "key": "MUL"
+                },
+                {
+                    "name": "language",
+                    "type": "varchar",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "name",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "email",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": "UNI"
+                },
+                {
+                    "name": "email_verified_at",
+                    "type": "timestamp",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "password",
+                    "type": "varchar",
+                    "nullable": false,
+                    "key": null
+                },
+                {
+                    "name": "remember_token",
+                    "type": "varchar",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "created_at",
+                    "type": "timestamp",
+                    "nullable": true,
+                    "key": null
+                },
+                {
+                    "name": "updated_at",
+                    "type": "timestamp",
+                    "nullable": true,
+                    "key": null
+                }
+            ]
+        }
+    ],
+    "relationships": [
+        {
+            "constraint_name": "tenant_languages_tenant_id_foreign",
+            "table": "tenant_languages",
+            "column": "tenant_id",
+            "referenced_table": "tenants",
+            "referenced_column": "tenant_id"
+        }
+    ]
+}
