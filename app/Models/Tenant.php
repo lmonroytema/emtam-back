@@ -29,6 +29,9 @@ class Tenant extends Model
         'notifications_production_mode',
         'test_notification_emails',
         'test_notification_whatsapp_numbers',
+        'notifications_message_real',
+        'notifications_message_simulacrum',
+        'notifications_include_credentials',
     ];
 
     protected function casts(): array
@@ -38,6 +41,7 @@ class Tenant extends Model
             'notifications_production_mode' => 'boolean',
             'test_notification_emails' => 'array',
             'test_notification_whatsapp_numbers' => 'array',
+            'notifications_include_credentials' => 'boolean',
         ];
     }
 

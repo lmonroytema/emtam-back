@@ -9,6 +9,7 @@ use App\Models\TenantLanguage;
 use App\Services\TenantContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
@@ -53,6 +54,9 @@ class TenantSettingsController extends Controller
                 'notifications_production_mode' => (bool) ($tenant->notifications_production_mode ?? false),
                 'test_notification_emails' => is_array($tenant->test_notification_emails) ? array_values($tenant->test_notification_emails) : [],
                 'test_notification_whatsapp_numbers' => is_array($tenant->test_notification_whatsapp_numbers) ? array_values($tenant->test_notification_whatsapp_numbers) : [],
+                'notifications_message_real' => $tenant->notifications_message_real,
+                'notifications_message_simulacrum' => $tenant->notifications_message_simulacrum,
+                'notifications_include_credentials' => (bool) ($tenant->notifications_include_credentials ?? false),
                 'logo_path' => $tenant->logo_path,
                 'logo_url' => $logoUrl,
                 'gps_min_lat' => $tenant->gps_min_lat,
@@ -118,6 +122,17 @@ class TenantSettingsController extends Controller
             $testWhatsappNumbers = array_values(array_unique($numbers));
         }
 
+        $messageReal = null;
+        if (array_key_exists('notifications_message_real', $data)) {
+            $value = $data['notifications_message_real'];
+            $messageReal = is_string($value) ? trim($value) : null;
+        }
+        $messageSimulacrum = null;
+        if (array_key_exists('notifications_message_simulacrum', $data)) {
+            $value = $data['notifications_message_simulacrum'];
+            $messageSimulacrum = is_string($value) ? trim($value) : null;
+        }
+
         $tenant->forceFill([
             'name' => array_key_exists('name', $data) ? (string) $data['name'] : $tenant->name,
             'address' => $data['address'] ?? $tenant->address,
@@ -129,6 +144,15 @@ class TenantSettingsController extends Controller
                 : (bool) ($tenant->notifications_production_mode ?? false),
             'test_notification_emails' => $testEmails !== null ? $testEmails : (is_array($tenant->test_notification_emails) ? array_values($tenant->test_notification_emails) : []),
             'test_notification_whatsapp_numbers' => $testWhatsappNumbers !== null ? $testWhatsappNumbers : (is_array($tenant->test_notification_whatsapp_numbers) ? array_values($tenant->test_notification_whatsapp_numbers) : []),
+            'notifications_message_real' => array_key_exists('notifications_message_real', $data)
+                ? $messageReal
+                : $tenant->notifications_message_real,
+            'notifications_message_simulacrum' => array_key_exists('notifications_message_simulacrum', $data)
+                ? $messageSimulacrum
+                : $tenant->notifications_message_simulacrum,
+            'notifications_include_credentials' => array_key_exists('notifications_include_credentials', $data)
+                ? (bool) $data['notifications_include_credentials']
+                : (bool) ($tenant->notifications_include_credentials ?? false),
             'gps_min_lat' => $data['gps_min_lat'] ?? $tenant->gps_min_lat,
             'gps_max_lat' => $data['gps_max_lat'] ?? $tenant->gps_max_lat,
             'gps_min_lng' => $data['gps_min_lng'] ?? $tenant->gps_min_lng,
@@ -191,6 +215,9 @@ class TenantSettingsController extends Controller
                 'notifications_production_mode' => (bool) ($tenant->notifications_production_mode ?? false),
                 'test_notification_emails' => is_array($tenant->test_notification_emails) ? array_values($tenant->test_notification_emails) : [],
                 'test_notification_whatsapp_numbers' => is_array($tenant->test_notification_whatsapp_numbers) ? array_values($tenant->test_notification_whatsapp_numbers) : [],
+                'notifications_message_real' => $tenant->notifications_message_real,
+                'notifications_message_simulacrum' => $tenant->notifications_message_simulacrum,
+                'notifications_include_credentials' => (bool) ($tenant->notifications_include_credentials ?? false),
                 'logo_path' => $tenant->logo_path,
                 'logo_url' => $logoUrl,
                 'gps_min_lat' => $tenant->gps_min_lat,
@@ -251,7 +278,7 @@ class TenantSettingsController extends Controller
         }
 
         $fullPath = Storage::disk('public')->path($path);
-        $mime = Storage::disk('public')->mimeType($path) ?: 'application/octet-stream';
+        $mime = File::mimeType($fullPath) ?: 'application/octet-stream';
 
         return response()->file($fullPath, [
             'Content-Type' => $mime,
