@@ -347,6 +347,7 @@ class TenantDocumentController extends Controller
 
         $filename = (string) ($doc->original_name ?? 'documento');
         $absolutePath = Storage::disk('local')->path($path);
+
         return response()->download($absolutePath, $filename);
     }
 }

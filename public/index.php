@@ -18,7 +18,7 @@ function findLaravelBasePath(string $publicDir): ?string
     ];
 
     foreach ($candidates as $candidate) {
-        if (!$candidate) {
+        if (! $candidate) {
             continue;
         }
 
@@ -35,7 +35,7 @@ function findLaravelBasePath(string $publicDir): ?string
 
 $basePath = findLaravelBasePath(__DIR__);
 
-if (!$basePath) {
+if (! $basePath) {
     http_response_code(500);
     echo 'No se pudo localizar el proyecto Laravel (vendor/autoload.php).';
     exit(1);

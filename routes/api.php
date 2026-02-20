@@ -3,10 +3,10 @@
 use App\Http\Controllers\Api\V1\ActivationController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\TableCrudController;
+use App\Http\Controllers\Api\V1\TenantDocumentController;
 use App\Http\Controllers\Api\V1\TenantLanguageController;
 use App\Http\Controllers\Api\V1\TenantSettingsController;
 use App\Http\Controllers\Api\V1\TenantUsersController;
-use App\Http\Controllers\Api\V1\TenantDocumentController;
 use App\Http\Controllers\Api\V1\UserLanguageController;
 use Illuminate\Support\Facades\Route;
 
