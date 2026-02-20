@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\V1\TableCrudController;
 use App\Http\Controllers\Api\V1\TenantLanguageController;
 use App\Http\Controllers\Api\V1\TenantSettingsController;
 use App\Http\Controllers\Api\V1\TenantUsersController;
+use App\Http\Controllers\Api\V1\TenantDocumentController;
 use App\Http\Controllers\Api\V1\UserLanguageController;
 use Illuminate\Support\Facades\Route;
 
@@ -48,5 +49,16 @@ Route::prefix('v1')->group(function () {
 
         Route::put('tenant/languages', [TenantLanguageController::class, 'update']);
         Route::put('user/language', [UserLanguageController::class, 'update']);
+
+        Route::get('tenant/documents/folders', [TenantDocumentController::class, 'listFolders']);
+        Route::post('tenant/documents/folders', [TenantDocumentController::class, 'createFolder']);
+        Route::put('tenant/documents/folders/{folderId}', [TenantDocumentController::class, 'updateFolder']);
+        Route::delete('tenant/documents/folders/{folderId}', [TenantDocumentController::class, 'deleteFolder']);
+
+        Route::get('tenant/documents/folders/{folderId}/documents', [TenantDocumentController::class, 'listDocuments']);
+        Route::post('tenant/documents/folders/{folderId}/documents', [TenantDocumentController::class, 'uploadDocuments']);
+        Route::put('tenant/documents/{documentId}', [TenantDocumentController::class, 'updateDocument']);
+        Route::delete('tenant/documents/{documentId}', [TenantDocumentController::class, 'deleteDocument']);
+        Route::get('tenant/documents/{documentId}/download', [TenantDocumentController::class, 'downloadDocument']);
     });
 });
