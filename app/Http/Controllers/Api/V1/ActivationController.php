@@ -1782,6 +1782,282 @@ class ActivationController extends Controller
         ]);
     }
 
+    public function controlPanel(Request $request, string $activationId): JsonResponse
+    {
+        $tenantId = $this->tenantContext->tenantId();
+
+        if ($tenantId === null) {
+            return response()->json(['message' => __('messages.tenant.missing')], 422);
+        }
+
+        $activationId = trim($activationId);
+        if ($activationId === '') {
+            return response()->json(['message' => 'Invalid activation id.'], 422);
+        }
+
+        if (! Schema::hasTable('activacion_del_plan_trs')) {
+            return response()->json(['message' => 'Missing activacion_del_plan_trs table.'], 422);
+        }
+
+        $activationExists = DB::table('activacion_del_plan_trs')
+            ->when(
+                Schema::hasColumn('activacion_del_plan_trs', 'ac_de_pl-tenant_id'),
+                static fn ($q) => $q->where('ac_de_pl-tenant_id', $tenantId),
+            )
+            ->where('ac_de_pl-id', $activationId)
+            ->exists();
+
+        if (! $activationExists) {
+            return response()->json(['message' => 'Activation not found.'], 404);
+        }
+
+        $grupos = [];
+        if (Schema::hasTable('grupo_operativo_cat')) {
+            $grupos = DB::table('grupo_operativo_cat')
+                ->when(
+                    Schema::hasColumn('grupo_operativo_cat', 'gr_op-tenant_id'),
+                    static fn ($q) => $q->where('gr_op-tenant_id', $tenantId),
+                )
+                ->orderByRaw("CAST(COALESCE(`gr_op-ord_vis`, '0') AS UNSIGNED) ASC")
+                ->orderBy('gr_op-id')
+                ->get()
+                ->all();
+        }
+
+        $nivelRow = null;
+        if (Schema::hasTable('activacion_nivel_hist_trs')) {
+            $nivelRow = DB::table('activacion_nivel_hist_trs')
+                ->when(
+                    Schema::hasColumn('activacion_nivel_hist_trs', 'ac_ni_hi-tenant_id'),
+                    static fn ($q) => $q->where('ac_ni_hi-tenant_id', $tenantId),
+                )
+                ->where('ac_ni_hi-ac_de_pl_id-fk', $activationId)
+                ->orderByRaw("CASE WHEN UPPER(COALESCE(`ac_ni_hi-activo`, 'NO')) = 'SI' THEN 0 ELSE 1 END ASC")
+                ->orderByRaw("CAST(COALESCE(`ac_ni_hi-orden`, '999') AS UNSIGNED) DESC")
+                ->orderBy('ac_ni_hi-id', 'DESC')
+                ->first();
+        }
+
+        $actionSetId = trim((string) ($nivelRow?->{'ac_ni_hi-ac_se_id-fk'} ?? ''));
+        if ($actionSetId === '') {
+            $actionSetId = null;
+        }
+
+        $totalAcciones = 0;
+        if ($actionSetId !== null && Schema::hasTable('accion_set_detalle_cfg')) {
+            $totalAcciones = DB::table('accion_set_detalle_cfg')
+                ->when(
+                    Schema::hasColumn('accion_set_detalle_cfg', 'ac_se_de-tenant_id'),
+                    static fn ($q) => $q->where('ac_se_de-tenant_id', $tenantId),
+                )
+                ->where('ac_se_de-ac_se_id-fk', $actionSetId)
+                ->whereRaw("UPPER(COALESCE(`ac_se_de-activo`, 'SI')) <> 'NO'")
+                ->count();
+        }
+
+        $doneCountByGrupo = [];
+        $totalCountByGrupo = [];
+        if (Schema::hasTable('ejecucion_accion_trs')) {
+            $ejecuciones = DB::table('ejecucion_accion_trs')
+                ->when(
+                    Schema::hasColumn('ejecucion_accion_trs', 'ej_ac-tenant_id'),
+                    static fn ($q) => $q->where('ej_ac-tenant_id', $tenantId),
+                )
+                ->where('ej_ac-ac_de_pl_id-fk', $activationId)
+                ->get(['ej_ac-gr_op_id-fk', 'ej_ac-estado', 'ej_ac-ts_fin']);
+
+            foreach ($ejecuciones as $e) {
+                $gid = trim((string) ($e->{'ej_ac-gr_op_id-fk'} ?? ''));
+                if ($gid === '') {
+                    continue;
+                }
+                $totalCountByGrupo[$gid] = ($totalCountByGrupo[$gid] ?? 0) + 1;
+                $estado = strtoupper(trim((string) ($e->{'ej_ac-estado'} ?? '')));
+                $done = $estado === 'REALIZADA' || $estado === 'REALIZADO' || (string) ($e->{'ej_ac-ts_fin'} ?? '') !== '';
+                if (! $done) {
+                    continue;
+                }
+                $doneCountByGrupo[$gid] = ($doneCountByGrupo[$gid] ?? 0) + 1;
+            }
+        }
+
+        $lastNotificationByPerson = [];
+        $confirmedNotificationIds = [];
+        if (Schema::hasTable('notificacion_envio_trs')) {
+            $sent = DB::table('notificacion_envio_trs')
+                ->when(
+                    Schema::hasColumn('notificacion_envio_trs', 'no_en-tenant_id'),
+                    static fn ($q) => $q->where('no_en-tenant_id', $tenantId),
+                )
+                ->where('no_en-ac_de_pl_id-fk', $activationId)
+                ->whereNotNull('no_en-per_id-fk')
+                ->orderBy('no_en-ts', 'DESC')
+                ->orderBy('no_en-id', 'DESC')
+                ->get(['no_en-id', 'no_en-per_id-fk', 'no_en-ts']);
+
+            foreach ($sent as $row) {
+                $perId = trim((string) ($row->{'no_en-per_id-fk'} ?? ''));
+                if ($perId === '') {
+                    continue;
+                }
+                if (! array_key_exists($perId, $lastNotificationByPerson)) {
+                    $lastNotificationByPerson[$perId] = [
+                        'id' => trim((string) ($row->{'no_en-id'} ?? '')),
+                        'ts' => trim((string) ($row->{'no_en-ts'} ?? '')),
+                    ];
+                }
+            }
+        }
+
+        if (! empty($lastNotificationByPerson) && Schema::hasTable('notificacion_confirmacion_trs')) {
+            $lastIds = array_values(array_filter(array_map(
+                static fn ($row) => is_array($row) ? trim((string) ($row['id'] ?? '')) : '',
+                $lastNotificationByPerson
+            ), static fn ($v) => $v !== ''));
+            if (! empty($lastIds)) {
+                $rowsConfirm = DB::table('notificacion_confirmacion_trs')
+                    ->when(
+                        Schema::hasColumn('notificacion_confirmacion_trs', 'no_co-tenant_id'),
+                        static fn ($q) => $q->where('no_co-tenant_id', $tenantId),
+                    )
+                    ->whereIn('no_co-no_en_id-fk', $lastIds)
+                    ->orderBy('no_co-ts', 'DESC')
+                    ->get(['no_co-no_en_id-fk', 'no_co-confirmado']);
+
+                foreach ($rowsConfirm as $row) {
+                    $noEnId = trim((string) ($row->{'no_co-no_en_id-fk'} ?? ''));
+                    if ($noEnId === '') {
+                        continue;
+                    }
+                    $confirmado = strtoupper(trim((string) ($row->{'no_co-confirmado'} ?? '')));
+                    if ($confirmado === '' || $confirmado === 'SI' || $confirmado === 'S' || $confirmado === '1' || $confirmado === 'TRUE') {
+                        $confirmedNotificationIds[$noEnId] = true;
+                    }
+                }
+            }
+        }
+
+        $assignByGrupo = [];
+        if (Schema::hasTable('asignacion_en_funciones_trs')) {
+            $asignaciones = DB::table('asignacion_en_funciones_trs as a')
+                ->leftJoin('persona_mst as p', 'p.per-id', '=', 'a.as_en_fu-per_id-fk')
+                ->when(
+                    Schema::hasColumn('asignacion_en_funciones_trs', 'as_en_fu-tenant_id'),
+                    static fn ($q) => $q->where('a.as_en_fu-tenant_id', $tenantId),
+                )
+                ->when(
+                    Schema::hasColumn('persona_mst', 'per-tenant_id'),
+                    static fn ($q) => $q->where('p.per-tenant_id', $tenantId),
+                )
+                ->where('a.as_en_fu-ac_de_pl_id-fk', $activationId)
+                ->whereRaw("COALESCE(`a`.`as_en_fu-ts_fin`, '') = ''")
+                ->whereRaw("UPPER(COALESCE(`a`.`as_en_fu-estado`, '')) <> 'CERRADA'")
+                ->get([
+                    'a.as_en_fu-gr_op_id-fk',
+                    'a.as_en_fu-per_id-fk',
+                    'a.as_en_fu-tipo_asignacion',
+                    'a.as_en_fu-ts_ini',
+                    'p.per-nombre',
+                    'p.per-apellido_1',
+                    'p.per-apellido_2',
+                    'p.per-email',
+                ]);
+
+            foreach ($asignaciones as $a) {
+                $gid = trim((string) ($a->{'as_en_fu-gr_op_id-fk'} ?? ''));
+                $perId = trim((string) ($a->{'as_en_fu-per_id-fk'} ?? ''));
+                if ($gid === '' || $perId === '') {
+                    continue;
+                }
+                $tipo = strtoupper(trim((string) ($a->{'as_en_fu-tipo_asignacion'} ?? 'SUPLENTE')));
+                if ($tipo !== 'TITULAR' && $tipo !== 'SUPLENTE') {
+                    $tipo = 'SUPLENTE';
+                }
+                $nombre = trim(implode(' ', array_filter([
+                    (string) ($a->{'per-nombre'} ?? ''),
+                    (string) ($a->{'per-apellido_1'} ?? ''),
+                    (string) ($a->{'per-apellido_2'} ?? ''),
+                ])));
+                $persona = [
+                    'per_id' => $perId,
+                    'nombre' => $nombre !== '' ? $nombre : $perId,
+                    'email' => $a->{'per-email'} ?? null,
+                    'estado_disponibilidad' => null,
+                ];
+                if (array_key_exists($perId, $lastNotificationByPerson)) {
+                    $noEnId = (string) ($lastNotificationByPerson[$perId]['id'] ?? '');
+                    $persona['estado_disponibilidad'] = $noEnId !== '' && array_key_exists($noEnId, $confirmedNotificationIds)
+                        ? 'CONFIRMADO'
+                        : 'PENDIENTE';
+                }
+                $assignByGrupo[$gid] ??= ['TITULAR' => [], 'SUPLENTE' => []];
+                $assignByGrupo[$gid][$tipo][] = [
+                    'persona' => $persona,
+                    'ts_ini' => (string) ($a->{'as_en_fu-ts_ini'} ?? ''),
+                ];
+            }
+        }
+
+        $rows = [];
+        foreach ($grupos as $g) {
+            $gid = trim((string) ($g->{'gr_op-id'} ?? ''));
+            if ($gid === '') {
+                continue;
+            }
+            $entry = $assignByGrupo[$gid] ?? ['TITULAR' => [], 'SUPLENTE' => []];
+            usort($entry['TITULAR'], static fn ($a, $b) => strcmp((string) ($b['ts_ini'] ?? ''), (string) ($a['ts_ini'] ?? '')));
+            usort($entry['SUPLENTE'], static fn ($a, $b) => strcmp((string) ($b['ts_ini'] ?? ''), (string) ($a['ts_ini'] ?? '')));
+            $titular = $entry['TITULAR'][0]['persona'] ?? null;
+            $suplentes = array_values(array_map(
+                static fn ($row) => $row['persona'],
+                array_slice($entry['SUPLENTE'], 0, 2),
+            ));
+
+            $done = (int) ($doneCountByGrupo[$gid] ?? 0);
+            $totalForGrupo = (int) ($totalCountByGrupo[$gid] ?? 0);
+            if ($totalForGrupo <= 0) {
+                $totalForGrupo = $totalAcciones;
+            }
+            $pendingForGrupo = max(0, $totalForGrupo - $done);
+            $percent = $totalForGrupo > 0 ? (int) min(100, round(($done / $totalForGrupo) * 100)) : 0;
+            $hasAsignacion = $titular !== null || count($suplentes) > 0;
+            $color = ! $hasAsignacion ? 'ROJO' : ($totalAcciones > 0 && $done >= $totalAcciones ? 'VERDE' : 'AMARILLO');
+
+            $rows[] = [
+                'grupo_id' => $gid,
+                'grupo_nombre' => $g?->{'gr_op-nombre'} ?? $gid,
+                'titular' => $titular,
+                'suplentes' => $suplentes,
+                'done' => $done,
+                'total' => $totalForGrupo,
+                'pending' => $pendingForGrupo,
+                'percent' => $percent,
+                'color' => $color,
+            ];
+        }
+
+        $overallDone = array_reduce($rows, static fn ($acc, $r) => $acc + (int) ($r['done'] ?? 0), 0);
+        $overallTotal = array_reduce(
+            $rows,
+            static fn ($acc, $r) => $acc + (int) ($r['total'] ?? 0),
+            0
+        );
+        if ($overallTotal <= 0) {
+            $overallTotal = $totalAcciones * count($rows);
+        }
+        $overallPercent = $overallTotal > 0 ? (int) min(100, round(($overallDone / $overallTotal) * 100)) : 0;
+
+        return response()->json([
+            'activation_id' => $activationId,
+            'action_set_id' => $actionSetId,
+            'total_actions' => $totalAcciones,
+            'overall_done' => $overallDone,
+            'overall_total' => $overallTotal,
+            'overall_percent' => $overallPercent,
+            'groups' => $rows,
+        ]);
+    }
+
     public function uploadDocuments(Request $request, string $activationId): JsonResponse
     {
         $tenantId = $this->tenantContext->tenantId();
