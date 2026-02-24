@@ -116,12 +116,22 @@ class TenantDocumentController extends Controller
         $docs = DB::table('tenant_documents')
             ->where('folder_id', $folderId)
             ->where('tenant_id', $tenantId)
-            ->get(['path']);
+            ->get(['id', 'path']);
 
         foreach ($docs as $doc) {
             $path = (string) ($doc->path ?? '');
             if ($path !== '' && Storage::disk('local')->exists($path)) {
                 Storage::disk('local')->delete($path);
+            }
+        }
+
+        if (Schema::hasTable('tenant_document_riesgo_trs')) {
+            $docIds = $docs->pluck('id')->all();
+            if (count($docIds) > 0) {
+                DB::table('tenant_document_riesgo_trs')
+                    ->where('tenant_id', $tenantId)
+                    ->whereIn('document_id', $docIds)
+                    ->delete();
             }
         }
 
@@ -179,6 +189,28 @@ class TenantDocumentController extends Controller
                 'u.name as uploader_name',
             ]);
 
+        $riskMap = [];
+        if (Schema::hasTable('tenant_document_riesgo_trs') && $docs->count() > 0) {
+            $docIds = $docs->pluck('id')->all();
+            $rows = DB::table('tenant_document_riesgo_trs')
+                ->where('tenant_id', $tenantId)
+                ->whereIn('document_id', $docIds)
+                ->get(['document_id', 'riesgo_id']);
+            foreach ($rows as $row) {
+                $docId = (int) ($row->document_id ?? 0);
+                if (! $docId) {
+                    continue;
+                }
+                $riskMap[$docId] = $riskMap[$docId] ?? [];
+                $riskMap[$docId][] = (string) ($row->riesgo_id ?? '');
+            }
+        }
+
+        foreach ($docs as $doc) {
+            $docId = (int) ($doc->id ?? 0);
+            $doc->risk_ids = $riskMap[$docId] ?? [];
+        }
+
         return response()->json(['documents' => $docs]);
     }
 
@@ -188,6 +220,10 @@ class TenantDocumentController extends Controller
         if ($tenantId === null) {
             return response()->json(['message' => __('messages.tenant.missing')], 422);
         }
+
+        @ini_set('upload_max_filesize', '50M');
+        @ini_set('post_max_size', '60M');
+        @ini_set('max_file_uploads', '20');
 
         if (! Schema::hasTable('tenant_documents') || ! Schema::hasTable('tenant_document_folders')) {
             return response()->json(['message' => 'Missing tenant document tables.'], 422);
@@ -202,15 +238,31 @@ class TenantDocumentController extends Controller
             return response()->json(['message' => 'Folder not found.'], 404);
         }
 
+        $contentLength = (int) ($request->server('CONTENT_LENGTH') ?? 0);
+        if (! $request->hasFile('files') && $contentLength > 0) {
+            $uploadLimit = (string) (ini_get('upload_max_filesize') ?: '');
+            $postLimit = (string) (ini_get('post_max_size') ?: '');
+            return response()->json([
+                'message' => 'Upload failed. Check PHP limits upload_max_filesize and post_max_size.',
+                'upload_max_filesize' => $uploadLimit,
+                'post_max_size' => $postLimit,
+                'content_length' => $contentLength,
+            ], 422);
+        }
+
         $data = $request->validate([
             'files' => ['required', 'array', 'min:1'],
-            'files.*' => ['file', 'max:10240', 'mimes:pdf,doc,docx,xls,xlsx,ppt,pptx,csv,txt,jpg,jpeg,png'],
+            'files.*' => ['file', 'max:51200', 'mimes:pdf,doc,docx,xls,xlsx,ppt,pptx,csv,txt,jpg,jpeg,png'],
             'names' => ['required', 'array', 'min:1'],
             'names.*' => ['required', 'string', 'max:255'],
+            'risk_ids' => ['sometimes', 'array'],
+            'risk_ids.*' => ['nullable'],
+            'risk_ids.*.*' => ['string', 'max:255'],
         ]);
 
         $files = $data['files'] ?? [];
         $names = $data['names'] ?? [];
+        $riskIds = $data['risk_ids'] ?? [];
 
         if (count($files) !== count($names)) {
             return response()->json(['message' => 'Names count does not match files count.'], 422);
@@ -252,6 +304,23 @@ class TenantDocumentController extends Controller
             ]);
 
             $created[] = $id;
+
+            if (Schema::hasTable('tenant_document_riesgo_trs')) {
+                $riskList = $riskIds[$idx] ?? [];
+                if (! is_array($riskList)) {
+                    $riskList = [$riskList];
+                }
+                $riskList = array_values(array_unique(array_filter(array_map('strval', $riskList), fn ($v) => trim($v) !== '')));
+                foreach ($riskList as $riskId) {
+                    DB::table('tenant_document_riesgo_trs')->insert([
+                        'tenant_id' => $tenantId,
+                        'document_id' => $id,
+                        'riesgo_id' => $riskId,
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+                }
+            }
         }
 
         return response()->json(['message' => 'OK', 'ids' => $created]);
@@ -266,13 +335,24 @@ class TenantDocumentController extends Controller
 
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
+            'risk_ids' => ['sometimes', 'array'],
+            'risk_ids.*' => ['nullable', 'string', 'max:255'],
         ]);
 
         if (! Schema::hasTable('tenant_documents')) {
             return response()->json(['message' => 'Missing tenant_documents table.'], 422);
         }
 
-        $updated = DB::table('tenant_documents')
+        $exists = DB::table('tenant_documents')
+            ->where('id', $documentId)
+            ->where('tenant_id', $tenantId)
+            ->exists();
+
+        if (! $exists) {
+            return response()->json(['message' => 'Document not found.'], 404);
+        }
+
+        DB::table('tenant_documents')
             ->where('id', $documentId)
             ->where('tenant_id', $tenantId)
             ->update([
@@ -280,8 +360,25 @@ class TenantDocumentController extends Controller
                 'updated_at' => now(),
             ]);
 
-        if ($updated === 0) {
-            return response()->json(['message' => 'Document not found.'], 404);
+        if (array_key_exists('risk_ids', $data) && Schema::hasTable('tenant_document_riesgo_trs')) {
+            DB::table('tenant_document_riesgo_trs')
+                ->where('tenant_id', $tenantId)
+                ->where('document_id', $documentId)
+                ->delete();
+            $riskList = $data['risk_ids'] ?? [];
+            if (! is_array($riskList)) {
+                $riskList = [$riskList];
+            }
+            $riskList = array_values(array_unique(array_filter(array_map('strval', $riskList), fn ($v) => trim($v) !== '')));
+            foreach ($riskList as $riskId) {
+                DB::table('tenant_document_riesgo_trs')->insert([
+                    'tenant_id' => $tenantId,
+                    'document_id' => $documentId,
+                    'riesgo_id' => $riskId,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
         }
 
         return response()->json(['message' => 'OK']);
@@ -310,6 +407,13 @@ class TenantDocumentController extends Controller
         $path = (string) ($doc->path ?? '');
         if ($path !== '' && Storage::disk('local')->exists($path)) {
             Storage::disk('local')->delete($path);
+        }
+
+        if (Schema::hasTable('tenant_document_riesgo_trs')) {
+            DB::table('tenant_document_riesgo_trs')
+                ->where('tenant_id', $tenantId)
+                ->where('document_id', $documentId)
+                ->delete();
         }
 
         DB::table('tenant_documents')

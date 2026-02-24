@@ -14,12 +14,14 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->api(
             prepend: [
+                \Illuminate\Http\Middleware\HandleCors::class,
                 \App\Http\Middleware\ResolveTenant::class,
                 \App\Http\Middleware\SetLocale::class,
             ],
         );
 
         $middleware->alias([
+            'auth' => \App\Http\Middleware\Authenticate::class,
             'tenant' => \App\Http\Middleware\ResolveTenant::class,
             'setLocale' => \App\Http\Middleware\SetLocale::class,
         ]);

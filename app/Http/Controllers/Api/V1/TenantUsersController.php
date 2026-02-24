@@ -45,7 +45,7 @@ class TenantUsersController extends Controller
             ->orderBy('email')
             ->limit($perPage)
             ->offset(($page - 1) * $perPage)
-            ->get(['id', 'name', 'email', 'tenant_id', 'language', 'created_at', 'updated_at']);
+            ->get(['id', 'name', 'email', 'tenant_id', 'language', 'perfil', 'created_at', 'updated_at']);
 
         return response()->json([
             'data' => $users,
@@ -77,11 +77,12 @@ class TenantUsersController extends Controller
             'email' => strtolower(trim((string) $data['email'])),
             'password' => Hash::make((string) $data['password']),
             'language' => $language ?: null,
+            'perfil' => $data['perfil'],
         ]);
 
         return response()->json([
             'message' => 'Created.',
-            'data' => $user->only(['id', 'name', 'email', 'tenant_id', 'language']),
+            'data' => $user->only(['id', 'name', 'email', 'tenant_id', 'language', 'perfil']),
         ], 201);
     }
 
@@ -119,11 +120,15 @@ class TenantUsersController extends Controller
             $user->password = Hash::make($data['password']);
         }
 
+        if (array_key_exists('perfil', $data)) {
+            $user->perfil = $data['perfil'];
+        }
+
         $user->save();
 
         return response()->json([
             'message' => 'OK',
-            'data' => $user->only(['id', 'name', 'email', 'tenant_id', 'language']),
+            'data' => $user->only(['id', 'name', 'email', 'tenant_id', 'language', 'perfil']),
         ]);
     }
 

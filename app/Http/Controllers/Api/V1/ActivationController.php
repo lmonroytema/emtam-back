@@ -544,6 +544,14 @@ class ActivationController extends Controller
 
         $tenant = Tenant::query()->where('tenant_id', $tenantId)->first();
         $productionMode = (bool) ($tenant?->notifications_production_mode ?? false);
+        $modoLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
+        $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
+        $modoLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
+        $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
+        $modoLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
+        $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
+        $modoLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
+        $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
         $testEmails = [];
         if (! $productionMode) {
             $raw = $tenant?->test_notification_emails;
@@ -606,7 +614,7 @@ class ActivationController extends Controller
 
         foreach ($people as $p) {
             $to = $productionMode ? (string) ($p['email'] ?? '') : implode(',', $testEmails);
-            $subject = 'Acciones asignadas — '.$activationId;
+            $subject = $subjectPrefix.'Acciones asignadas — '.$activationId;
 
             $accionesByTipo = [
                 'TITULAR' => [],
@@ -638,6 +646,9 @@ class ActivationController extends Controller
 
             $lines = [];
             $lines[] = 'ACTIVACION: '.$activationId;
+            if (! $productionMode) {
+                $lines[] = 'MODO: PRUEBA';
+            }
             $lines[] = 'PERSONA: '.(string) ($p['nombre'] ?? $p['per_id']);
             $lines[] = 'EMAIL: '.($to !== '' ? $to : '—');
             $lines[] = '';
@@ -698,7 +709,7 @@ class ActivationController extends Controller
             }
 
             if (Schema::hasTable('notificacion_envio_trs')) {
-                DB::table('notificacion_envio_trs')->insert([
+                $insert = [
                     'no_en-id' => 'NOEN-'.Str::uuid()->toString(),
                     'no_en-tenant_id' => $tenantId,
                     'no_en-ac_de_pl_id-fk' => $activationId,
@@ -710,7 +721,11 @@ class ActivationController extends Controller
                     'no_en-ts' => now()->toDateTimeString(),
                     'no_en-estado' => $mode === 'file' ? 'SIMULADO' : 'ENVIADO',
                     'no_en-num_de_intento' => '0',
-                ]);
+                ];
+                if (Schema::hasColumn('notificacion_envio_trs', 'no_en-modo')) {
+                    $insert['no_en-modo'] = $modoLabel;
+                }
+                DB::table('notificacion_envio_trs')->insert($insert);
             }
 
             $index['recipients'][] = [
@@ -782,6 +797,9 @@ class ActivationController extends Controller
                 'Plan Activo',
                 'Activación: '.$activationId,
             ];
+            if (! $productionMode) {
+                $waMessageLines[] = '[PRUEBA]';
+            }
             if ($activationUrl) {
                 $waMessageLines[] = 'Enlace: '.$activationUrl;
             }
@@ -827,7 +845,7 @@ class ActivationController extends Controller
                     if (count($perIds) === 1) {
                         $perIdForLog = $perIds[0];
                     }
-                    DB::table('notificacion_envio_trs')->insert([
+                    $insert = [
                         'no_en-id' => 'NOEN-'.Str::uuid()->toString(),
                         'no_en-tenant_id' => $tenantId,
                         'no_en-ac_de_pl_id-fk' => $activationId,
@@ -839,7 +857,11 @@ class ActivationController extends Controller
                         'no_en-ts' => now()->toDateTimeString(),
                         'no_en-estado' => ($mode === 'file' || ! $sentOk) ? 'SIMULADO' : 'ENVIADO',
                         'no_en-num_de_intento' => '0',
-                    ]);
+                    ];
+                    if (Schema::hasColumn('notificacion_envio_trs', 'no_en-modo')) {
+                        $insert['no_en-modo'] = $modoLabel;
+                    }
+                    DB::table('notificacion_envio_trs')->insert($insert);
                 }
             }
         }
@@ -940,6 +962,8 @@ class ActivationController extends Controller
 
         $tenant = Tenant::query()->where('tenant_id', $tenantId)->first();
         $productionMode = (bool) ($tenant?->notifications_production_mode ?? false);
+        $modoLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
+        $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
         $testEmails = [];
         if (! $productionMode) {
             $raw = $tenant?->test_notification_emails;
@@ -989,7 +1013,7 @@ class ActivationController extends Controller
 
         $label = $isSimulacro ? 'simulacro' : 'emergencia';
         $prefix = $isSimulacro ? '[SIMULACRO] ' : '';
-        $subject = $prefix.'Fin de '.$label.' — '.$activationId;
+        $subject = $subjectPrefix.$prefix.'Fin de '.$label.' — '.$activationId;
         $detalle = trim((string) ($validated['detalle'] ?? ''));
 
         $index = [
@@ -1004,6 +1028,9 @@ class ActivationController extends Controller
             $to = $productionMode ? (string) ($p['email'] ?? '') : implode(',', $testEmails);
             $lines = [];
             $lines[] = 'ACTIVACION: '.$activationId;
+            if (! $productionMode) {
+                $lines[] = 'MODO: PRUEBA';
+            }
             $lines[] = 'AVISO: Fin de '.$label;
             $lines[] = 'FECHA/HORA: '.now()->toDateTimeString();
             $lines[] = 'PERSONA: '.(string) ($p['nombre'] ?? $p['per_id']);
@@ -1052,7 +1079,7 @@ class ActivationController extends Controller
             }
 
             if (Schema::hasTable('notificacion_envio_trs')) {
-                DB::table('notificacion_envio_trs')->insert([
+                $insert = [
                     'no_en-id' => 'NOEN-'.Str::uuid()->toString(),
                     'no_en-tenant_id' => $tenantId,
                     'no_en-ac_de_pl_id-fk' => $activationId,
@@ -1064,7 +1091,11 @@ class ActivationController extends Controller
                     'no_en-ts' => now()->toDateTimeString(),
                     'no_en-estado' => $mode === 'file' ? 'SIMULADO' : 'ENVIADO',
                     'no_en-num_de_intento' => '0',
-                ]);
+                ];
+                if (Schema::hasColumn('notificacion_envio_trs', 'no_en-modo')) {
+                    $insert['no_en-modo'] = $modoLabel;
+                }
+                DB::table('notificacion_envio_trs')->insert($insert);
             }
 
             $index['recipients'][] = [

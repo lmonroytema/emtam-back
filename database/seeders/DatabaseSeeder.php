@@ -53,6 +53,7 @@ class DatabaseSeeder extends Seeder
                 'password' => 'password',
                 'tenant_id' => $tenantId,
                 'language' => 'es',
+                'perfil' => 'director',
             ],
         );
 
@@ -63,6 +64,7 @@ class DatabaseSeeder extends Seeder
                 'password' => 'password',
                 'tenant_id' => $tenantId,
                 'language' => 'es',
+                'perfil' => 'admin',
             ],
         );
 
@@ -156,7 +158,31 @@ class DatabaseSeeder extends Seeder
                 'password' => 'password',
                 'tenant_id' => $tenantId,
                 'language' => 'es',
+                'perfil' => 'recurso',
             ],
         );
+
+        $resourceUsers = [
+            ['email' => 'recurso1@morell.test', 'name' => 'Recurso 1'],
+            ['email' => 'recurso2@morell.test', 'name' => 'Recurso 2'],
+            ['email' => 'recurso3@morell.test', 'name' => 'Recurso 3'],
+        ];
+
+        foreach ($resourceUsers as $resource) {
+            User::query()->updateOrCreate(
+                ['email' => $resource['email']],
+                [
+                    'name' => $resource['name'],
+                    'password' => 'password',
+                    'tenant_id' => $tenantId,
+                    'language' => 'es',
+                    'perfil' => 'recurso',
+                ],
+            );
+        }
+
+        User::query()
+            ->whereNull('perfil')
+            ->update(['perfil' => 'recurso']);
     }
 }

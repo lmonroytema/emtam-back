@@ -46,6 +46,7 @@ class AuthController extends Controller
                     'email' => $personaEmail,
                     'tenant_id' => $tenantId !== '' ? $tenantId : null,
                     'password' => Hash::make(env('TEST_USER_PASSWORD', 'notificacion123')),
+                    'perfil' => 'recurso',
                 ]);
             }
         }
@@ -67,6 +68,7 @@ class AuthController extends Controller
                 'email' => $user->email,
                 'tenant_id' => $user->tenant_id,
                 'language' => $user->language,
+                'perfil' => $user->perfil,
             ],
         ]);
     }
