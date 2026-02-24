@@ -242,6 +242,7 @@ class TenantDocumentController extends Controller
         if (! $request->hasFile('files') && $contentLength > 0) {
             $uploadLimit = (string) (ini_get('upload_max_filesize') ?: '');
             $postLimit = (string) (ini_get('post_max_size') ?: '');
+
             return response()->json([
                 'message' => 'Upload failed. Check PHP limits upload_max_filesize and post_max_size.',
                 'upload_max_filesize' => $uploadLimit,

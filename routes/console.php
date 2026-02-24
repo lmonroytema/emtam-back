@@ -9,6 +9,67 @@ Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
 
+Artisan::command('activaciones:reset {--force}', function () {
+    $tables = [
+        'notificacion_confirmacion_trs',
+        'notificacion_envio_trs',
+        'ejecucion_accion_trs',
+        'asignacion_en_funciones_trs',
+        'notas_operativas_trs',
+        'cronologia_emergencia_trs',
+        'activacion_nivel_hist_trs',
+        'activacion_del_plan_trs',
+    ];
+
+    $existing = [];
+    $missing = [];
+
+    foreach ($tables as $table) {
+        if (Schema::hasTable($table)) {
+            $count = DB::table($table)->count();
+            $existing[] = ['name' => $table, 'count' => $count];
+        } else {
+            $missing[] = $table;
+        }
+    }
+
+    if (empty($existing)) {
+        $this->error('No hay tablas para reiniciar.');
+
+        return 1;
+    }
+
+    $this->info('Tablas a reiniciar:');
+    foreach ($existing as $row) {
+        $this->line('- '.$row['name'].' (filas: '.$row['count'].')');
+    }
+
+    if (! empty($missing)) {
+        $this->warn('Tablas no encontradas:');
+        foreach ($missing as $table) {
+            $this->line('- '.$table);
+        }
+    }
+
+    if (! $this->option('force')) {
+        if (! $this->confirm('¿Deseas continuar y eliminar estos registros?')) {
+            $this->line('Cancelado.');
+
+            return 0;
+        }
+    }
+
+    DB::transaction(function () use ($existing): void {
+        foreach ($existing as $row) {
+            DB::table($row['name'])->delete();
+        }
+    });
+
+    $this->info('Reinicio completado.');
+
+    return 0;
+})->purpose('Reinicia las tablas de planes activados');
+
 Artisan::command('csv:validate {--dir=} {--limit=0} {--json} {--all} {--mode=}', function () {
     $limit = (int) $this->option('limit');
     $asJson = (bool) $this->option('json');

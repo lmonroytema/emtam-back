@@ -45,7 +45,7 @@ class AuthController extends Controller
                     'name' => $nombre !== '' ? $nombre : $personaEmail,
                     'email' => $personaEmail,
                     'tenant_id' => $tenantId !== '' ? $tenantId : null,
-                    'password' => Hash::make(env('TEST_USER_PASSWORD', 'notificacion123')),
+                    'password' => Hash::make(env('TEST_USER_PASSWORD', 'password')),
                     'perfil' => 'recurso',
                 ]);
             }

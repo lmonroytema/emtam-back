@@ -34,6 +34,7 @@ class DatabaseSeeder extends Seeder
         }
 
         $this->call(ExcelSeeder::class);
+        $this->call(DirectorioTelefonicoSeeder::class);
 
         $directorEmail = 'director@morell.test';
         $directorPersonaId = 'PER-DIRECTOR';
@@ -184,5 +185,10 @@ class DatabaseSeeder extends Seeder
         User::query()
             ->whereNull('perfil')
             ->update(['perfil' => 'recurso']);
+
+        User::query()->get()->each(function (User $user): void {
+            $user->password = 'password';
+            $user->save();
+        });
     }
 }

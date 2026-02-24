@@ -169,6 +169,7 @@ return new class extends Migration
             $baseType = $detectBase($normalized);
             if ($baseType !== null) {
                 $baseColumns[$baseType] = $col;
+
                 continue;
             }
 

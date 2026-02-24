@@ -612,21 +612,38 @@ class ActivationController extends Controller
             'recipients' => [],
         ];
 
-        foreach ($people as $p) {
-            $to = $productionMode ? (string) ($p['email'] ?? '') : implode(',', $testEmails);
-            $subject = $subjectPrefix.'Acciones asignadas — '.$activationId;
+        $isSimulacro = false;
+        if (Schema::hasTable('activacion_del_plan_trs') && Schema::hasTable('tipo_emergencia_cat')) {
+            $activation = DB::table('activacion_del_plan_trs')
+                ->where('ac_de_pl-tenant_id', $tenantId)
+                ->where('ac_de_pl-id', $activationId)
+                ->first();
+            $tiEmId = trim((string) ($activation?->{'ac_de_pl-ti_em_id-fk'} ?? ''));
+            if ($tiEmId !== '') {
+                $tiEm = DB::table('tipo_emergencia_cat')
+                    ->when(
+                        Schema::hasColumn('tipo_emergencia_cat', 'ti_em-tenant_id'),
+                        static fn ($q) => $q->where('ti_em-tenant_id', $tenantId),
+                    )
+                    ->where('ti_em-id', $tiEmId)
+                    ->first();
+                $tiEmCod = strtoupper(trim((string) ($tiEm?->{'ti_em-cod'} ?? '')));
+                $tiEmNombre = strtoupper(trim((string) ($tiEm?->{'ti_em-nombre'} ?? '')));
+                $isSimulacro = str_contains($tiEmCod, 'SIM') || str_contains($tiEmNombre, 'SIMULACRO');
+            }
+        }
 
+        $notificationMessage = trim((string) ($isSimulacro ? ($tenant?->notifications_message_simulacrum ?? '') : ($tenant?->notifications_message_real ?? '')));
+        $buildActionsByTipo = static function (array $acciones): array {
             $accionesByTipo = [
                 'TITULAR' => [],
                 'SUPLENTE' => [],
             ];
-
-            foreach (($p['acciones'] ?? []) as $a) {
+            foreach ($acciones as $a) {
                 $tag = strtoupper((string) ($a['tipo_asignacion'] ?? 'SUPLENTE')) === 'TITULAR' ? 'TITULAR' : 'SUPLENTE';
                 $estado = trim((string) ($a['estado'] ?? '')) ?: 'PENDIENTE';
                 $key = trim((string) ($a['accion_operativa_id'] ?? '')) ?: trim((string) ($a['accion_detalle_id'] ?? '')) ?: trim((string) ($a['accion'] ?? ''));
                 $label = trim((string) ($a['accion_operativa_descrip'] ?? '')) ?: trim((string) ($a['accion_operativa_cod'] ?? '')) ?: trim((string) ($a['accion'] ?? ''));
-
                 if (! array_key_exists($key, $accionesByTipo[$tag])) {
                     $accionesByTipo[$tag][$key] = [
                         'accion_operativa_id' => trim((string) ($a['accion_operativa_id'] ?? '')) ?: null,
@@ -636,7 +653,6 @@ class ActivationController extends Controller
                         'items' => [],
                     ];
                 }
-
                 $accionesByTipo[$tag][$key]['items'][] = [
                     'ejecucion_id' => (string) ($a['ejecucion_id'] ?? ''),
                     'accion_detalle_id' => (string) ($a['accion_detalle_id'] ?? ''),
@@ -644,95 +660,197 @@ class ActivationController extends Controller
                 ];
             }
 
-            $lines = [];
-            $lines[] = 'ACTIVACION: '.$activationId;
-            if (! $productionMode) {
-                $lines[] = 'MODO: PRUEBA';
-            }
-            $lines[] = 'PERSONA: '.(string) ($p['nombre'] ?? $p['per_id']);
-            $lines[] = 'EMAIL: '.($to !== '' ? $to : '—');
-            $lines[] = '';
-            $lines[] = 'ACCIONES (TITULAR):';
-            foreach (($accionesByTipo['TITULAR'] ?? []) as $group) {
-                $lines[] = '- '.$group['accion'];
-                foreach (($group['items'] ?? []) as $it) {
-                    $lines[] = '  * '.$it['estado'].' ('.$it['ejecucion_id'].')';
-                }
-            }
-            $lines[] = '';
-            $lines[] = 'ACCIONES (SUPLENTE):';
-            foreach (($accionesByTipo['SUPLENTE'] ?? []) as $group) {
-                $lines[] = '- '.$group['accion'];
-                foreach (($group['items'] ?? []) as $it) {
-                    $lines[] = '  * '.$it['estado'].' ('.$it['ejecucion_id'].')';
-                }
-            }
-            $body = implode("\n", $lines)."\n";
+            return $accionesByTipo;
+        };
 
-            if ($mode === 'file') {
-                $safeTarget = $productionMode ? ($to !== '' ? $to : (string) ($p['per_id'] ?? 'persona')) : ($testEmails[0] ?? 'test');
-                $safe = preg_replace('/[^A-Za-z0-9._-]+/', '_', $safeTarget) ?: 'persona';
-                $path = 'notifications_outbox/'.$tenantId.'/'.$activationId.'/'.$ts.'-'.$safe.'.txt';
-                Storage::disk('local')->put($path, $body);
-                $jsonPath = 'notifications_outbox/'.$tenantId.'/'.$activationId.'/'.$ts.'-'.$safe.'.json';
-                Storage::disk('local')->put($jsonPath, json_encode([
-                    'activation_id' => $activationId,
-                    'tenant_id' => $tenantId,
-                    'mode' => $mode,
-                    'generated_at' => now()->toDateTimeString(),
-                    'subject' => $subject,
-                    'persona' => [
-                        'per_id' => (string) ($p['per_id'] ?? ''),
-                        'nombre' => (string) ($p['nombre'] ?? ''),
-                        'email' => $to !== '' ? $to : null,
-                    ],
-                    'acciones_por_tipo' => [
-                        'TITULAR' => array_values($accionesByTipo['TITULAR'] ?? []),
-                        'SUPLENTE' => array_values($accionesByTipo['SUPLENTE'] ?? []),
-                    ],
-                ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-                $filesWritten++;
-            } else {
-                if ($productionMode) {
+        if ($productionMode) {
+            foreach ($people as $p) {
+                $to = (string) ($p['email'] ?? '');
+                $subject = $subjectPrefix.'Acciones asignadas — '.$activationId;
+                $accionesByTipo = $buildActionsByTipo(is_array($p['acciones'] ?? null) ? $p['acciones'] : []);
+
+                $lines = [];
+                $lines[] = 'ACTIVACION: '.$activationId;
+                $lines[] = 'PERSONA: '.(string) ($p['nombre'] ?? $p['per_id']);
+                $lines[] = 'EMAIL: '.($to !== '' ? $to : '—');
+                if ($notificationMessage !== '') {
+                    $lines[] = '';
+                    $lines[] = 'MENSAJE:';
+                    $lines[] = $notificationMessage;
+                }
+                $lines[] = '';
+                $lines[] = 'ACCIONES (TITULAR):';
+                foreach (($accionesByTipo['TITULAR'] ?? []) as $group) {
+                    $lines[] = '- '.$group['accion'];
+                    foreach (($group['items'] ?? []) as $it) {
+                        $lines[] = '  * '.$it['estado'].' ('.$it['ejecucion_id'].')';
+                    }
+                }
+                $lines[] = '';
+                $lines[] = 'ACCIONES (SUPLENTE):';
+                foreach (($accionesByTipo['SUPLENTE'] ?? []) as $group) {
+                    $lines[] = '- '.$group['accion'];
+                    foreach (($group['items'] ?? []) as $it) {
+                        $lines[] = '  * '.$it['estado'].' ('.$it['ejecucion_id'].')';
+                    }
+                }
+                $body = implode("\n", $lines)."\n";
+
+                if ($mode === 'file') {
+                    $safeTarget = $to !== '' ? $to : (string) ($p['per_id'] ?? 'persona');
+                    $safe = preg_replace('/[^A-Za-z0-9._-]+/', '_', $safeTarget) ?: 'persona';
+                    $path = 'notifications_outbox/'.$tenantId.'/'.$activationId.'/'.$ts.'-'.$safe.'.txt';
+                    Storage::disk('local')->put($path, $body);
+                    $jsonPath = 'notifications_outbox/'.$tenantId.'/'.$activationId.'/'.$ts.'-'.$safe.'.json';
+                    Storage::disk('local')->put($jsonPath, json_encode([
+                        'activation_id' => $activationId,
+                        'tenant_id' => $tenantId,
+                        'mode' => $mode,
+                        'generated_at' => now()->toDateTimeString(),
+                        'subject' => $subject,
+                        'persona' => [
+                            'per_id' => (string) ($p['per_id'] ?? ''),
+                            'nombre' => (string) ($p['nombre'] ?? ''),
+                            'email' => $to !== '' ? $to : null,
+                        ],
+                        'acciones_por_tipo' => [
+                            'TITULAR' => array_values($accionesByTipo['TITULAR'] ?? []),
+                            'SUPLENTE' => array_values($accionesByTipo['SUPLENTE'] ?? []),
+                        ],
+                    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+                    $filesWritten++;
+                } else {
                     if ($to !== '') {
                         Mail::raw($body, static function ($m) use ($to, $subject) {
                             $m->to($to)->subject($subject);
                         });
                         $sent++;
                     }
-                } elseif (! empty($testEmails)) {
-                    Mail::raw($body, static function ($m) use ($testEmails, $subject) {
-                        $m->to($testEmails)->subject($subject);
+                }
+
+                if (Schema::hasTable('notificacion_envio_trs')) {
+                    $insert = [
+                        'no_en-id' => 'NOEN-'.Str::uuid()->toString(),
+                        'no_en-tenant_id' => $tenantId,
+                        'no_en-ac_de_pl_id-fk' => $activationId,
+                        'no_en-per_id-fk' => $p['per_id'],
+                        'no_en-gr_op_id-fk' => null,
+                        'no_en-rol_id-fk' => null,
+                        'no_en-ca_co_id-fk' => null,
+                        'no_en-mensaje' => $subject,
+                        'no_en-ts' => now()->toDateTimeString(),
+                        'no_en-estado' => $mode === 'file' ? 'SIMULADO' : 'ENVIADO',
+                        'no_en-num_de_intento' => '0',
+                    ];
+                    if (Schema::hasColumn('notificacion_envio_trs', 'no_en-modo')) {
+                        $insert['no_en-modo'] = $modoLabel;
+                    }
+                    DB::table('notificacion_envio_trs')->insert($insert);
+                }
+
+                $index['recipients'][] = [
+                    'per_id' => (string) ($p['per_id'] ?? ''),
+                    'nombre' => (string) ($p['nombre'] ?? ''),
+                    'email' => $to !== '' ? $to : null,
+                ];
+            }
+        } elseif (! empty($testEmails)) {
+            $subject = $subjectPrefix.'Acciones asignadas — '.$activationId;
+            $personBlocks = [];
+            foreach ($people as $p) {
+                $accionesByTipo = $buildActionsByTipo(is_array($p['acciones'] ?? null) ? $p['acciones'] : []);
+                $block = [];
+                $block[] = 'PERSONA: '.(string) ($p['nombre'] ?? $p['per_id']);
+                $block[] = 'EMAIL REAL: '.((string) ($p['email'] ?? '') !== '' ? (string) ($p['email'] ?? '') : '—');
+                $block[] = '';
+                $block[] = 'ACCIONES (TITULAR):';
+                foreach (($accionesByTipo['TITULAR'] ?? []) as $group) {
+                    $block[] = '- '.$group['accion'];
+                    foreach (($group['items'] ?? []) as $it) {
+                        $block[] = '  * '.$it['estado'].' ('.$it['ejecucion_id'].')';
+                    }
+                }
+                $block[] = '';
+                $block[] = 'ACCIONES (SUPLENTE):';
+                foreach (($accionesByTipo['SUPLENTE'] ?? []) as $group) {
+                    $block[] = '- '.$group['accion'];
+                    foreach (($group['items'] ?? []) as $it) {
+                        $block[] = '  * '.$it['estado'].' ('.$it['ejecucion_id'].')';
+                    }
+                }
+                $personBlocks[] = $block;
+            }
+
+            foreach ($testEmails as $testEmail) {
+                $lines = [];
+                $lines[] = 'ACTIVACION: '.$activationId;
+                $lines[] = 'MODO: PRUEBA';
+                $lines[] = 'DESTINO PRUEBA: '.$testEmail;
+                if ($notificationMessage !== '') {
+                    $lines[] = '';
+                    $lines[] = 'MENSAJE:';
+                    $lines[] = $notificationMessage;
+                }
+                foreach ($personBlocks as $block) {
+                    $lines[] = '';
+                    foreach ($block as $line) {
+                        $lines[] = $line;
+                    }
+                }
+                $body = implode("\n", $lines)."\n";
+
+                if ($mode === 'file') {
+                    $safe = preg_replace('/[^A-Za-z0-9._-]+/', '_', $testEmail) ?: 'test';
+                    $path = 'notifications_outbox/'.$tenantId.'/'.$activationId.'/'.$ts.'-'.$safe.'.txt';
+                    Storage::disk('local')->put($path, $body);
+                    $jsonPath = 'notifications_outbox/'.$tenantId.'/'.$activationId.'/'.$ts.'-'.$safe.'.json';
+                    Storage::disk('local')->put($jsonPath, json_encode([
+                        'activation_id' => $activationId,
+                        'tenant_id' => $tenantId,
+                        'mode' => $mode,
+                        'generated_at' => now()->toDateTimeString(),
+                        'subject' => $subject,
+                        'destino_prueba' => $testEmail,
+                        'personas' => array_map(static fn ($p) => [
+                            'per_id' => (string) ($p['per_id'] ?? ''),
+                            'nombre' => (string) ($p['nombre'] ?? ''),
+                            'email' => (string) ($p['email'] ?? ''),
+                        ], $people),
+                    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+                    $filesWritten++;
+                } else {
+                    Mail::raw($body, static function ($m) use ($testEmail, $subject) {
+                        $m->to($testEmail)->subject($subject);
                     });
                     $sent++;
                 }
-            }
 
-            if (Schema::hasTable('notificacion_envio_trs')) {
-                $insert = [
-                    'no_en-id' => 'NOEN-'.Str::uuid()->toString(),
-                    'no_en-tenant_id' => $tenantId,
-                    'no_en-ac_de_pl_id-fk' => $activationId,
-                    'no_en-per_id-fk' => $p['per_id'],
-                    'no_en-gr_op_id-fk' => null,
-                    'no_en-rol_id-fk' => null,
-                    'no_en-ca_co_id-fk' => null,
-                    'no_en-mensaje' => $subject,
-                    'no_en-ts' => now()->toDateTimeString(),
-                    'no_en-estado' => $mode === 'file' ? 'SIMULADO' : 'ENVIADO',
-                    'no_en-num_de_intento' => '0',
-                ];
-                if (Schema::hasColumn('notificacion_envio_trs', 'no_en-modo')) {
-                    $insert['no_en-modo'] = $modoLabel;
+                if (Schema::hasTable('notificacion_envio_trs')) {
+                    $insert = [
+                        'no_en-id' => 'NOEN-'.Str::uuid()->toString(),
+                        'no_en-tenant_id' => $tenantId,
+                        'no_en-ac_de_pl_id-fk' => $activationId,
+                        'no_en-per_id-fk' => null,
+                        'no_en-gr_op_id-fk' => null,
+                        'no_en-rol_id-fk' => null,
+                        'no_en-ca_co_id-fk' => null,
+                        'no_en-mensaje' => $subject.' -> '.$testEmail,
+                        'no_en-ts' => now()->toDateTimeString(),
+                        'no_en-estado' => $mode === 'file' ? 'SIMULADO' : 'ENVIADO',
+                        'no_en-num_de_intento' => '0',
+                    ];
+                    if (Schema::hasColumn('notificacion_envio_trs', 'no_en-modo')) {
+                        $insert['no_en-modo'] = $modoLabel;
+                    }
+                    DB::table('notificacion_envio_trs')->insert($insert);
                 }
-                DB::table('notificacion_envio_trs')->insert($insert);
-            }
 
-            $index['recipients'][] = [
-                'per_id' => (string) ($p['per_id'] ?? ''),
-                'nombre' => (string) ($p['nombre'] ?? ''),
-                'email' => $to !== '' ? $to : null,
-            ];
+                $index['recipients'][] = [
+                    'per_id' => null,
+                    'nombre' => null,
+                    'email' => $testEmail,
+                ];
+            }
         }
 
         $normalizePhone = static function (?string $raw): ?string {
