@@ -264,6 +264,26 @@ class TenantDocumentController extends Controller
         $files = $data['files'] ?? [];
         $names = $data['names'] ?? [];
         $riskIds = $data['risk_ids'] ?? [];
+        $riskIdsByFile = [];
+        if (is_array($riskIds)) {
+            $hasNested = false;
+            foreach ($riskIds as $entry) {
+                if (is_array($entry)) {
+                    $hasNested = true;
+                    break;
+                }
+            }
+            if ($hasNested) {
+                $riskIdsByFile = $riskIds;
+            } else {
+                $flat = array_values(array_unique(array_filter(array_map('strval', $riskIds), fn ($v) => trim($v) !== '')));
+                if (! empty($flat)) {
+                    foreach (array_keys($files) as $idx) {
+                        $riskIdsByFile[$idx] = $flat;
+                    }
+                }
+            }
+        }
 
         if (count($files) !== count($names)) {
             return response()->json(['message' => 'Names count does not match files count.'], 422);
@@ -307,7 +327,7 @@ class TenantDocumentController extends Controller
             $created[] = $id;
 
             if (Schema::hasTable('tenant_document_riesgo_trs')) {
-                $riskList = $riskIds[$idx] ?? [];
+                $riskList = $riskIdsByFile[$idx] ?? [];
                 if (! is_array($riskList)) {
                     $riskList = [$riskList];
                 }
