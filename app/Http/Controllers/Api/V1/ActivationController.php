@@ -672,8 +672,8 @@ class ActivationController extends Controller
         if ($notificationMessage !== '') {
             $tmp = $notificationMessage;
             if (str_contains($tmp, 'XXXX')) {
-                $tmp = preg_replace('/XXXX/', $riesgoLabel !== '' ? $riesgoLabel : 'RIESGO', 1) ?? $tmp;
                 $tmp = preg_replace('/XXXX/', $nivelLabel !== '' ? $nivelLabel : 'NIVEL', 1) ?? $tmp;
+                $tmp = preg_replace('/XXXX/', $riesgoLabel !== '' ? $riesgoLabel : 'RIESGO', 1) ?? $tmp;
             }
             $notificationMessage = $tmp;
         }
@@ -718,15 +718,14 @@ class ActivationController extends Controller
                     : ($hasTitular ? 'TITULAR' : ($hasSuplente ? 'SUPLENTE' : '—'));
 
                 $lines = [];
+                if ($notificationMessage !== '') {
+                    $lines[] = $notificationMessage;
+                    $lines[] = '';
+                }
                 $lines[] = 'PLAN: '.$planName;
                 $lines[] = 'PERSONA: '.(string) ($p['nombre'] ?? $p['per_id']);
                 $lines[] = 'EMAIL: '.($to !== '' ? $to : '—');
                 $lines[] = 'ROL EN ACCIONES: '.$rolesLabel;
-                if ($notificationMessage !== '') {
-                    $lines[] = '';
-                    $lines[] = 'MENSAJE:';
-                    $lines[] = $notificationMessage;
-                }
                 $lines[] = '';
                 $lines[] = 'ACCIONES (TITULAR):';
                 foreach (($accionesByTipo['TITULAR'] ?? []) as $group) {
@@ -838,14 +837,13 @@ class ActivationController extends Controller
 
             foreach ($testEmails as $testEmail) {
                 $lines = [];
+                if ($notificationMessage !== '') {
+                    $lines[] = $notificationMessage;
+                    $lines[] = '';
+                }
                 $lines[] = 'PLAN: '.$planName;
                 $lines[] = 'MODO: PRUEBA';
                 $lines[] = 'DESTINO PRUEBA: '.$testEmail;
-                if ($notificationMessage !== '') {
-                    $lines[] = '';
-                    $lines[] = 'MENSAJE:';
-                    $lines[] = $notificationMessage;
-                }
                 foreach ($personBlocks as $block) {
                     $lines[] = '';
                     foreach ($block as $line) {
