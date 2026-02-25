@@ -23,6 +23,7 @@ class UpdateTenantSettingsRequest extends FormRequest
             'test_notification_whatsapp_numbers.*' => ['required', 'string', 'regex:/^\+?\d{8,15}$/'],
             'notifications_message_real' => ['sometimes', 'nullable', 'string'],
             'notifications_message_simulacrum' => ['sometimes', 'nullable', 'string'],
+            'notifications_message_phase2' => ['sometimes', 'nullable', 'string'],
             'notifications_include_credentials' => ['sometimes', 'boolean'],
             'gps_min_lat' => ['sometimes', 'nullable', 'numeric', 'between:-90,90'],
             'gps_max_lat' => ['sometimes', 'nullable', 'numeric', 'between:-90,90'],

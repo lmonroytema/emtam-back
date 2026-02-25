@@ -31,6 +31,7 @@ class Tenant extends Model
         'test_notification_whatsapp_numbers',
         'notifications_message_real',
         'notifications_message_simulacrum',
+        'notifications_message_phase2',
         'notifications_include_credentials',
     ];
 

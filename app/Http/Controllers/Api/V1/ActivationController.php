@@ -633,7 +633,50 @@ class ActivationController extends Controller
             }
         }
 
+        $riesgoLabel = '';
+        $nivelLabel = '';
+        if (Schema::hasTable('activacion_del_plan_trs')) {
+            $activation = DB::table('activacion_del_plan_trs')
+                ->where('ac_de_pl-tenant_id', $tenantId)
+                ->where('ac_de_pl-id', $activationId)
+                ->first();
+            $riesgoId = trim((string) ($activation?->{'ac_de_pl-rie_id-fk'} ?? ''));
+            $nivelId = trim((string) ($activation?->{'ac_de_pl-ni_al_id-fk-inicial'} ?? ''));
+            if ($riesgoId !== '' && Schema::hasTable('riesgo_cat')) {
+                $riesgo = DB::table('riesgo_cat')
+                    ->when(
+                        Schema::hasColumn('riesgo_cat', 'rie-tenant_id'),
+                        static fn ($q) => $q->where(function ($qq) use ($tenantId) {
+                            $qq->whereNull('rie-tenant_id')->orWhere('rie-tenant_id', $tenantId);
+                        }),
+                    )
+                    ->where('rie-id', $riesgoId)
+                    ->first();
+                $riesgoLabel = trim((string) ($riesgo?->{'rie-nombre'} ?? '')) ?: $riesgoId;
+            }
+            if ($nivelId !== '' && Schema::hasTable('nivel_alerta_cat')) {
+                $nivel = DB::table('nivel_alerta_cat')
+                    ->when(
+                        Schema::hasColumn('nivel_alerta_cat', 'ni_al-tenant_id'),
+                        static fn ($q) => $q->where(function ($qq) use ($tenantId) {
+                            $qq->whereNull('ni_al-tenant_id')->orWhere('ni_al-tenant_id', $tenantId);
+                        }),
+                    )
+                    ->where('ni_al-id', $nivelId)
+                    ->first();
+                $nivelLabel = trim((string) ($nivel?->{'ni_al-nombre'} ?? '')) ?: $nivelId;
+            }
+        }
+        $planName = implode(' · ', array_filter([$riesgoLabel, $nivelLabel], static fn ($v) => trim((string) $v) !== '')) ?: $activationId;
         $notificationMessage = trim((string) ($isSimulacro ? ($tenant?->notifications_message_simulacrum ?? '') : ($tenant?->notifications_message_real ?? '')));
+        if ($notificationMessage !== '') {
+            $tmp = $notificationMessage;
+            if (str_contains($tmp, 'XXXX')) {
+                $tmp = preg_replace('/XXXX/', $riesgoLabel !== '' ? $riesgoLabel : 'RIESGO', 1) ?? $tmp;
+                $tmp = preg_replace('/XXXX/', $nivelLabel !== '' ? $nivelLabel : 'NIVEL', 1) ?? $tmp;
+            }
+            $notificationMessage = $tmp;
+        }
         $buildActionsByTipo = static function (array $acciones): array {
             $accionesByTipo = [
                 'TITULAR' => [],
@@ -666,13 +709,19 @@ class ActivationController extends Controller
         if ($productionMode) {
             foreach ($people as $p) {
                 $to = (string) ($p['email'] ?? '');
-                $subject = $subjectPrefix.'Acciones asignadas — '.$activationId;
+                $subject = $subjectPrefix.'Acciones asignadas — '.$planName;
                 $accionesByTipo = $buildActionsByTipo(is_array($p['acciones'] ?? null) ? $p['acciones'] : []);
+                $hasTitular = ! empty($accionesByTipo['TITULAR'] ?? []);
+                $hasSuplente = ! empty($accionesByTipo['SUPLENTE'] ?? []);
+                $rolesLabel = $hasTitular && $hasSuplente
+                    ? 'TITULAR / SUPLENTE'
+                    : ($hasTitular ? 'TITULAR' : ($hasSuplente ? 'SUPLENTE' : '—'));
 
                 $lines = [];
-                $lines[] = 'ACTIVACION: '.$activationId;
+                $lines[] = 'PLAN: '.$planName;
                 $lines[] = 'PERSONA: '.(string) ($p['nombre'] ?? $p['per_id']);
                 $lines[] = 'EMAIL: '.($to !== '' ? $to : '—');
+                $lines[] = 'ROL EN ACCIONES: '.$rolesLabel;
                 if ($notificationMessage !== '') {
                     $lines[] = '';
                     $lines[] = 'MENSAJE:';
@@ -683,7 +732,7 @@ class ActivationController extends Controller
                 foreach (($accionesByTipo['TITULAR'] ?? []) as $group) {
                     $lines[] = '- '.$group['accion'];
                     foreach (($group['items'] ?? []) as $it) {
-                        $lines[] = '  * '.$it['estado'].' ('.$it['ejecucion_id'].')';
+                        $lines[] = '  * '.$it['estado'];
                     }
                 }
                 $lines[] = '';
@@ -691,7 +740,7 @@ class ActivationController extends Controller
                 foreach (($accionesByTipo['SUPLENTE'] ?? []) as $group) {
                     $lines[] = '- '.$group['accion'];
                     foreach (($group['items'] ?? []) as $it) {
-                        $lines[] = '  * '.$it['estado'].' ('.$it['ejecucion_id'].')';
+                        $lines[] = '  * '.$it['estado'];
                     }
                 }
                 $body = implode("\n", $lines)."\n";
@@ -755,19 +804,25 @@ class ActivationController extends Controller
                 ];
             }
         } elseif (! empty($testEmails)) {
-            $subject = $subjectPrefix.'Acciones asignadas — '.$activationId;
+            $subject = $subjectPrefix.'Acciones asignadas — '.$planName;
             $personBlocks = [];
             foreach ($people as $p) {
                 $accionesByTipo = $buildActionsByTipo(is_array($p['acciones'] ?? null) ? $p['acciones'] : []);
+                $hasTitular = ! empty($accionesByTipo['TITULAR'] ?? []);
+                $hasSuplente = ! empty($accionesByTipo['SUPLENTE'] ?? []);
+                $rolesLabel = $hasTitular && $hasSuplente
+                    ? 'TITULAR / SUPLENTE'
+                    : ($hasTitular ? 'TITULAR' : ($hasSuplente ? 'SUPLENTE' : '—'));
                 $block = [];
                 $block[] = 'PERSONA: '.(string) ($p['nombre'] ?? $p['per_id']);
                 $block[] = 'EMAIL REAL: '.((string) ($p['email'] ?? '') !== '' ? (string) ($p['email'] ?? '') : '—');
+                $block[] = 'ROL EN ACCIONES: '.$rolesLabel;
                 $block[] = '';
                 $block[] = 'ACCIONES (TITULAR):';
                 foreach (($accionesByTipo['TITULAR'] ?? []) as $group) {
                     $block[] = '- '.$group['accion'];
                     foreach (($group['items'] ?? []) as $it) {
-                        $block[] = '  * '.$it['estado'].' ('.$it['ejecucion_id'].')';
+                        $block[] = '  * '.$it['estado'];
                     }
                 }
                 $block[] = '';
@@ -775,7 +830,7 @@ class ActivationController extends Controller
                 foreach (($accionesByTipo['SUPLENTE'] ?? []) as $group) {
                     $block[] = '- '.$group['accion'];
                     foreach (($group['items'] ?? []) as $it) {
-                        $block[] = '  * '.$it['estado'].' ('.$it['ejecucion_id'].')';
+                        $block[] = '  * '.$it['estado'];
                     }
                 }
                 $personBlocks[] = $block;
@@ -783,7 +838,7 @@ class ActivationController extends Controller
 
             foreach ($testEmails as $testEmail) {
                 $lines = [];
-                $lines[] = 'ACTIVACION: '.$activationId;
+                $lines[] = 'PLAN: '.$planName;
                 $lines[] = 'MODO: PRUEBA';
                 $lines[] = 'DESTINO PRUEBA: '.$testEmail;
                 if ($notificationMessage !== '') {

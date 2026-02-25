@@ -56,6 +56,7 @@ class TenantSettingsController extends Controller
                 'test_notification_whatsapp_numbers' => is_array($tenant->test_notification_whatsapp_numbers) ? array_values($tenant->test_notification_whatsapp_numbers) : [],
                 'notifications_message_real' => $tenant->notifications_message_real,
                 'notifications_message_simulacrum' => $tenant->notifications_message_simulacrum,
+                'notifications_message_phase2' => $tenant->notifications_message_phase2,
                 'notifications_include_credentials' => (bool) ($tenant->notifications_include_credentials ?? false),
                 'logo_path' => $tenant->logo_path,
                 'logo_url' => $logoUrl,
@@ -132,6 +133,11 @@ class TenantSettingsController extends Controller
             $value = $data['notifications_message_simulacrum'];
             $messageSimulacrum = is_string($value) ? trim($value) : null;
         }
+        $messagePhase2 = null;
+        if (array_key_exists('notifications_message_phase2', $data)) {
+            $value = $data['notifications_message_phase2'];
+            $messagePhase2 = is_string($value) ? trim($value) : null;
+        }
 
         $tenant->forceFill([
             'name' => array_key_exists('name', $data) ? (string) $data['name'] : $tenant->name,
@@ -150,6 +156,9 @@ class TenantSettingsController extends Controller
             'notifications_message_simulacrum' => array_key_exists('notifications_message_simulacrum', $data)
                 ? $messageSimulacrum
                 : $tenant->notifications_message_simulacrum,
+            'notifications_message_phase2' => array_key_exists('notifications_message_phase2', $data)
+                ? $messagePhase2
+                : $tenant->notifications_message_phase2,
             'notifications_include_credentials' => array_key_exists('notifications_include_credentials', $data)
                 ? (bool) $data['notifications_include_credentials']
                 : (bool) ($tenant->notifications_include_credentials ?? false),
@@ -217,6 +226,7 @@ class TenantSettingsController extends Controller
                 'test_notification_whatsapp_numbers' => is_array($tenant->test_notification_whatsapp_numbers) ? array_values($tenant->test_notification_whatsapp_numbers) : [],
                 'notifications_message_real' => $tenant->notifications_message_real,
                 'notifications_message_simulacrum' => $tenant->notifications_message_simulacrum,
+                'notifications_message_phase2' => $tenant->notifications_message_phase2,
                 'notifications_include_credentials' => (bool) ($tenant->notifications_include_credentials ?? false),
                 'logo_path' => $tenant->logo_path,
                 'logo_url' => $logoUrl,
