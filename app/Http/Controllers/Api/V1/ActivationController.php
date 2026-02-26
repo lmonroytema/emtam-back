@@ -542,7 +542,10 @@ class ActivationController extends Controller
 
         $people = array_values($byPerson);
 
-        $tenant = Tenant::query()->where('tenant_id', $tenantId)->first();
+        $tenant = Tenant::query()->firstOrCreate(
+            ['tenant_id' => $tenantId],
+            ['name' => $tenantId, 'default_language' => 'es'],
+        );
         $productionMode = (bool) ($tenant?->notifications_production_mode ?? false);
         $modoLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
         $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
@@ -672,9 +675,29 @@ class ActivationController extends Controller
             }
         }
         $planName = implode(' · ', array_filter([$riesgoLabel, $nivelLabel], static fn ($v) => trim((string) $v) !== '')) ?: $activationId;
-        $notificationMessage = trim((string) ($isSimulacro ? ($tenant?->notifications_message_simulacrum ?? '') : ($tenant?->notifications_message_real ?? '')));
+        $normalizeMessage = static function ($value): string {
+            if (is_string($value)) {
+                $decoded = json_decode($value, true);
+                if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                    $value = $decoded;
+                }
+            }
+            if (is_array($value)) {
+                $parts = [];
+                foreach ($value as $v) {
+                    if (is_string($v) && trim($v) !== '') {
+                        $parts[] = trim($v);
+                    }
+                }
+                return trim(implode("\n", $parts));
+            }
+            return trim((string) ($value ?? ''));
+        };
+        $notificationMessage = $normalizeMessage(
+            $isSimulacro ? ($tenant?->notifications_message_simulacrum ?? '') : ($tenant?->notifications_message_real ?? ''),
+        );
         if ($notificationMessage === '' || preg_match('/^\d+$/', $notificationMessage) === 1) {
-            $phase2Message = $isSimulacro ? '' : trim((string) ($tenant?->notifications_message_phase2 ?? ''));
+            $phase2Message = $isSimulacro ? '' : $normalizeMessage($tenant?->notifications_message_phase2 ?? '');
             if ($phase2Message !== '') {
                 $notificationMessage = $phase2Message;
             } else {
@@ -687,11 +710,13 @@ class ActivationController extends Controller
         if ($notificationMessage !== '') {
             $tmp = $notificationMessage;
             if (str_contains($tmp, 'XXXX')) {
-                $tmp = preg_replace('/XXXX/', $nivelLabel !== '' ? $nivelLabel : 'NIVEL', 1) ?? $tmp;
-                $tmp = preg_replace('/XXXX/', $riesgoLabel !== '' ? $riesgoLabel : 'RIESGO', 1) ?? $tmp;
+                $tmp = preg_replace('/XXXX/', $nivelLabel !== '' ? $nivelLabel : 'NIVEL', $tmp, 1) ?? $tmp;
+                $tmp = preg_replace('/XXXX/', $riesgoLabel !== '' ? $riesgoLabel : 'RIESGO', $tmp, 1) ?? $tmp;
             }
             $notificationMessage = $tmp;
         }
+        $emailSubject = $subjectPrefix.'Acciones asignadas — '.$planName;
+        $emailBody = ($notificationMessage !== '' ? $notificationMessage : '')."\n";
         $buildActionsByTipo = static function (array $acciones): array {
             $accionesByTipo = [
                 'TITULAR' => [],
@@ -724,7 +749,7 @@ class ActivationController extends Controller
         if ($productionMode) {
             foreach ($people as $p) {
                 $to = (string) ($p['email'] ?? '');
-                $subject = $subjectPrefix.'Acciones asignadas — '.$planName;
+                $subject = $emailSubject;
                 $accionesByTipo = $buildActionsByTipo(is_array($p['acciones'] ?? null) ? $p['acciones'] : []);
                 $hasTitular = ! empty($accionesByTipo['TITULAR'] ?? []);
                 $hasSuplente = ! empty($accionesByTipo['SUPLENTE'] ?? []);
@@ -732,7 +757,7 @@ class ActivationController extends Controller
                     ? 'TITULAR / SUPLENTE'
                     : ($hasTitular ? 'TITULAR' : ($hasSuplente ? 'SUPLENTE' : '—'));
 
-                $body = ($notificationMessage !== '' ? $notificationMessage : '')."\n";
+                $body = $emailBody;
 
                 if ($mode === 'file') {
                     $safeTarget = $to !== '' ? $to : (string) ($p['per_id'] ?? 'persona');
@@ -793,9 +818,9 @@ class ActivationController extends Controller
                 ];
             }
         } elseif (! empty($testEmails)) {
-            $subject = $subjectPrefix.'Acciones asignadas — '.$planName;
+            $subject = $emailSubject;
             foreach ($testEmails as $testEmail) {
-                $body = ($notificationMessage !== '' ? $notificationMessage : '')."\n";
+                $body = $emailBody;
 
                 if ($mode === 'file') {
                     $safe = preg_replace('/[^A-Za-z0-9._-]+/', '_', $testEmail) ?: 'test';
@@ -997,6 +1022,8 @@ class ActivationController extends Controller
             'whatsapp_sent' => $whatsappSent,
             'whatsapp_files_written' => $whatsappFilesWritten,
             'whatsapp_recipients' => count($whatsappTargets),
+            'email_subject' => $emailSubject,
+            'email_body' => $emailBody,
         ]);
     }
 
