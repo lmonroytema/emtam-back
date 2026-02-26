@@ -635,11 +635,15 @@ class ActivationController extends Controller
 
         $riesgoLabel = '';
         $nivelLabel = '';
+        $activationMessageReal = '';
+        $activationMessageSimul = '';
         if (Schema::hasTable('activacion_del_plan_trs')) {
             $activation = DB::table('activacion_del_plan_trs')
                 ->where('ac_de_pl-tenant_id', $tenantId)
                 ->where('ac_de_pl-id', $activationId)
                 ->first();
+            $activationMessageReal = trim((string) ($activation?->{'ac_de_pl-mensaje_inic'} ?? ''));
+            $activationMessageSimul = trim((string) ($activation?->{'ac_de_pl-mensaje_simul'} ?? ''));
             $riesgoId = trim((string) ($activation?->{'ac_de_pl-rie_id-fk'} ?? ''));
             $nivelId = trim((string) ($activation?->{'ac_de_pl-ni_al_id-fk-inicial'} ?? ''));
             if ($riesgoId !== '' && Schema::hasTable('riesgo_cat')) {
@@ -669,6 +673,17 @@ class ActivationController extends Controller
         }
         $planName = implode(' · ', array_filter([$riesgoLabel, $nivelLabel], static fn ($v) => trim((string) $v) !== '')) ?: $activationId;
         $notificationMessage = trim((string) ($isSimulacro ? ($tenant?->notifications_message_simulacrum ?? '') : ($tenant?->notifications_message_real ?? '')));
+        if ($notificationMessage === '' || preg_match('/^\d+$/', $notificationMessage) === 1) {
+            $phase2Message = $isSimulacro ? '' : trim((string) ($tenant?->notifications_message_phase2 ?? ''));
+            if ($phase2Message !== '') {
+                $notificationMessage = $phase2Message;
+            } else {
+                $fallbackMessage = $isSimulacro ? $activationMessageSimul : $activationMessageReal;
+                if ($fallbackMessage !== '') {
+                    $notificationMessage = $fallbackMessage;
+                }
+            }
+        }
         if ($notificationMessage !== '') {
             $tmp = $notificationMessage;
             if (str_contains($tmp, 'XXXX')) {
@@ -717,32 +732,7 @@ class ActivationController extends Controller
                     ? 'TITULAR / SUPLENTE'
                     : ($hasTitular ? 'TITULAR' : ($hasSuplente ? 'SUPLENTE' : '—'));
 
-                $lines = [];
-                if ($notificationMessage !== '') {
-                    $lines[] = $notificationMessage;
-                    $lines[] = '';
-                }
-                $lines[] = 'PLAN: '.$planName;
-                $lines[] = 'PERSONA: '.(string) ($p['nombre'] ?? $p['per_id']);
-                $lines[] = 'EMAIL: '.($to !== '' ? $to : '—');
-                $lines[] = 'ROL EN ACCIONES: '.$rolesLabel;
-                $lines[] = '';
-                $lines[] = 'ACCIONES (TITULAR):';
-                foreach (($accionesByTipo['TITULAR'] ?? []) as $group) {
-                    $lines[] = '- '.$group['accion'];
-                    foreach (($group['items'] ?? []) as $it) {
-                        $lines[] = '  * '.$it['estado'];
-                    }
-                }
-                $lines[] = '';
-                $lines[] = 'ACCIONES (SUPLENTE):';
-                foreach (($accionesByTipo['SUPLENTE'] ?? []) as $group) {
-                    $lines[] = '- '.$group['accion'];
-                    foreach (($group['items'] ?? []) as $it) {
-                        $lines[] = '  * '.$it['estado'];
-                    }
-                }
-                $body = implode("\n", $lines)."\n";
+                $body = ($notificationMessage !== '' ? $notificationMessage : '')."\n";
 
                 if ($mode === 'file') {
                     $safeTarget = $to !== '' ? $to : (string) ($p['per_id'] ?? 'persona');
@@ -785,7 +775,7 @@ class ActivationController extends Controller
                         'no_en-gr_op_id-fk' => null,
                         'no_en-rol_id-fk' => null,
                         'no_en-ca_co_id-fk' => null,
-                        'no_en-mensaje' => $subject,
+                        'no_en-mensaje' => $notificationMessage !== '' ? $notificationMessage : $subject,
                         'no_en-ts' => now()->toDateTimeString(),
                         'no_en-estado' => $mode === 'file' ? 'SIMULADO' : 'ENVIADO',
                         'no_en-num_de_intento' => '0',
@@ -804,53 +794,8 @@ class ActivationController extends Controller
             }
         } elseif (! empty($testEmails)) {
             $subject = $subjectPrefix.'Acciones asignadas — '.$planName;
-            $personBlocks = [];
-            foreach ($people as $p) {
-                $accionesByTipo = $buildActionsByTipo(is_array($p['acciones'] ?? null) ? $p['acciones'] : []);
-                $hasTitular = ! empty($accionesByTipo['TITULAR'] ?? []);
-                $hasSuplente = ! empty($accionesByTipo['SUPLENTE'] ?? []);
-                $rolesLabel = $hasTitular && $hasSuplente
-                    ? 'TITULAR / SUPLENTE'
-                    : ($hasTitular ? 'TITULAR' : ($hasSuplente ? 'SUPLENTE' : '—'));
-                $block = [];
-                $block[] = 'PERSONA: '.(string) ($p['nombre'] ?? $p['per_id']);
-                $block[] = 'EMAIL REAL: '.((string) ($p['email'] ?? '') !== '' ? (string) ($p['email'] ?? '') : '—');
-                $block[] = 'ROL EN ACCIONES: '.$rolesLabel;
-                $block[] = '';
-                $block[] = 'ACCIONES (TITULAR):';
-                foreach (($accionesByTipo['TITULAR'] ?? []) as $group) {
-                    $block[] = '- '.$group['accion'];
-                    foreach (($group['items'] ?? []) as $it) {
-                        $block[] = '  * '.$it['estado'];
-                    }
-                }
-                $block[] = '';
-                $block[] = 'ACCIONES (SUPLENTE):';
-                foreach (($accionesByTipo['SUPLENTE'] ?? []) as $group) {
-                    $block[] = '- '.$group['accion'];
-                    foreach (($group['items'] ?? []) as $it) {
-                        $block[] = '  * '.$it['estado'];
-                    }
-                }
-                $personBlocks[] = $block;
-            }
-
             foreach ($testEmails as $testEmail) {
-                $lines = [];
-                if ($notificationMessage !== '') {
-                    $lines[] = $notificationMessage;
-                    $lines[] = '';
-                }
-                $lines[] = 'PLAN: '.$planName;
-                $lines[] = 'MODO: PRUEBA';
-                $lines[] = 'DESTINO PRUEBA: '.$testEmail;
-                foreach ($personBlocks as $block) {
-                    $lines[] = '';
-                    foreach ($block as $line) {
-                        $lines[] = $line;
-                    }
-                }
-                $body = implode("\n", $lines)."\n";
+                $body = ($notificationMessage !== '' ? $notificationMessage : '')."\n";
 
                 if ($mode === 'file') {
                     $safe = preg_replace('/[^A-Za-z0-9._-]+/', '_', $testEmail) ?: 'test';
@@ -887,7 +832,7 @@ class ActivationController extends Controller
                         'no_en-gr_op_id-fk' => null,
                         'no_en-rol_id-fk' => null,
                         'no_en-ca_co_id-fk' => null,
-                        'no_en-mensaje' => $subject.' -> '.$testEmail,
+                        'no_en-mensaje' => $notificationMessage !== '' ? $notificationMessage : $subject.' -> '.$testEmail,
                         'no_en-ts' => now()->toDateTimeString(),
                         'no_en-estado' => $mode === 'file' ? 'SIMULADO' : 'ENVIADO',
                         'no_en-num_de_intento' => '0',
