@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\V1\TenantLanguageController;
 use App\Http\Controllers\Api\V1\TenantSettingsController;
 use App\Http\Controllers\Api\V1\TenantUsersController;
 use App\Http\Controllers\Api\V1\UserLanguageController;
+use App\Http\Controllers\Api\V1\UserPasswordController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function () {
@@ -50,6 +51,7 @@ Route::prefix('v1')->group(function () {
 
         Route::put('tenant/languages', [TenantLanguageController::class, 'update']);
         Route::put('user/language', [UserLanguageController::class, 'update']);
+        Route::put('user/password', [UserPasswordController::class, 'update']);
 
         Route::get('tenant/documents/folders', [TenantDocumentController::class, 'listFolders']);
         Route::post('tenant/documents/folders', [TenantDocumentController::class, 'createFolder']);
