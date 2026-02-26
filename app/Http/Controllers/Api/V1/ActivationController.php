@@ -1956,6 +1956,229 @@ class ActivationController extends Controller
         ]);
     }
 
+    public function changeLevel(Request $request, string $activationId): JsonResponse
+    {
+        $tenantId = $this->tenantContext->tenantId();
+
+        if ($tenantId === null) {
+            return response()->json(['message' => __('messages.tenant.missing')], 422);
+        }
+
+        $activationId = trim($activationId);
+        if ($activationId === '') {
+            return response()->json(['message' => 'Invalid activation id.'], 422);
+        }
+
+        $validated = $request->validate([
+            'ni_al_id' => ['required', 'string'],
+            'per_id' => ['nullable', 'string'],
+            'rol_id' => ['nullable', 'string'],
+            'justificacion' => ['nullable', 'string'],
+        ]);
+
+        $newLevelId = trim($validated['ni_al_id']);
+        $perId = trim((string) ($validated['per_id'] ?? '')) ?: null;
+        $rolId = trim((string) ($validated['rol_id'] ?? '')) ?: null;
+        $justification = trim((string) ($validated['justificacion'] ?? '')) ?: null;
+
+        if (! Schema::hasTable('activacion_del_plan_trs')) {
+            return response()->json(['message' => 'Missing activacion_del_plan_trs table.'], 422);
+        }
+
+        return DB::transaction(function () use ($tenantId, $activationId, $newLevelId, $perId, $rolId, $justification) {
+            $activation = DB::table('activacion_del_plan_trs')
+                ->where('ac_de_pl-tenant_id', $tenantId)
+                ->where('ac_de_pl-id', $activationId)
+                ->first();
+
+            if (! $activation) {
+                return response()->json(['message' => 'Activation not found.'], 404);
+            }
+
+            $riesgoId = trim((string) ($activation->{'ac_de_pl-rie_id-fk'} ?? ''));
+
+            $niAl = null;
+            if (Schema::hasTable('nivel_alerta_cat')) {
+                $niAl = DB::table('nivel_alerta_cat')
+                    ->where('ni_al-id', $newLevelId)
+                    ->when(
+                        Schema::hasColumn('nivel_alerta_cat', 'ni_al-tenant_id'),
+                        static fn ($q) => $q->where('ni_al-tenant_id', $tenantId),
+                    )
+                    ->first();
+            }
+
+            if (! $niAl) {
+                return response()->json(['message' => 'Level not found.'], 422);
+            }
+
+            $actionSetIds = [];
+            if (Schema::hasTable('riesgo_nivel_accion_set_cfg')) {
+                $mapping = DB::table('riesgo_nivel_accion_set_cfg')
+                    ->when(
+                        Schema::hasColumn('riesgo_nivel_accion_set_cfg', 'ri_ni_ac_se-tenant_id'),
+                        static fn ($q) => $q->where('ri_ni_ac_se-tenant_id', $tenantId),
+                    )
+                    ->where('ri_ni_ac_se-rie_id-fk', $riesgoId)
+                    ->where('ri_ni_ac_se-ni_al_id-fk', $newLevelId)
+                    ->whereRaw("UPPER(COALESCE(`ri_ni_ac_se-activo`, 'SI')) <> 'NO'")
+                    ->orderByRaw("CAST(COALESCE(`ri_ni_ac_se-prioridad`, '999') AS UNSIGNED) ASC")
+                    ->orderBy('ri_ni_ac_se-id')
+                    ->get();
+
+                foreach ($mapping as $row) {
+                    $id = trim((string) ($row->{'ri_ni_ac_se-ac_se_id-fk'} ?? ''));
+                    if ($id !== '') {
+                        $actionSetIds[] = $id;
+                    }
+                }
+            }
+
+            if (empty($actionSetIds) && Schema::hasTable('riesgo_cat') && Schema::hasTable('tipo_riesgo_nivel_accion_set_cfg')) {
+                $riesgo = DB::table('riesgo_cat')
+                    ->when(
+                        Schema::hasColumn('riesgo_cat', 'rie-tenant_id'),
+                        static fn ($q) => $q->where('rie-tenant_id', $tenantId),
+                    )
+                    ->where('rie-id', $riesgoId)
+                    ->first();
+                $tipoRiesgoId = trim((string) ($riesgo?->{'rie-ti_ri_id-fk'} ?? ''));
+
+                if ($tipoRiesgoId !== '') {
+                    $mappingTipo = DB::table('tipo_riesgo_nivel_accion_set_cfg')
+                        ->when(
+                            Schema::hasColumn('tipo_riesgo_nivel_accion_set_cfg', 'ti_ri_ni_ac_se-tenant_id'),
+                            static fn ($q) => $q->where('ti_ri_ni_ac_se-tenant_id', $tenantId),
+                        )
+                        ->where('ti_ri_ni_ac_se-ti_ri_id-fk', $tipoRiesgoId)
+                        ->where('ti_ri_ni_ac_se-ni_al_id-fk', $newLevelId)
+                        ->whereRaw("UPPER(COALESCE(`ti_ri_ni_ac_se-activo`, 'SI')) <> 'NO'")
+                        ->orderByRaw("CAST(COALESCE(`ti_ri_ni_ac_se-orden`, '999') AS UNSIGNED) ASC")
+                        ->orderBy('ti_ri_ni_ac_se-id')
+                        ->get();
+
+                    foreach ($mappingTipo as $row) {
+                        $id = trim((string) ($row->{'ti_ri_ni_ac_se-ac_se_id-fk'} ?? ''));
+                        if ($id !== '') {
+                            $actionSetIds[] = $id;
+                        }
+                    }
+                }
+            }
+
+            $actionSetIds = array_values(array_unique(array_filter($actionSetIds, static fn ($v) => is_string($v) && trim($v) !== '')));
+            $actionSetId = $actionSetIds[0] ?? null;
+
+            if (Schema::hasTable('activacion_nivel_hist_trs')) {
+                DB::table('activacion_nivel_hist_trs')
+                    ->where('ac_ni_hi-tenant_id', $tenantId)
+                    ->where('ac_ni_hi-ac_de_pl_id-fk', $activationId)
+                    ->update(['ac_ni_hi-activo' => 'NO']);
+
+                DB::table('activacion_nivel_hist_trs')->insert([
+                    'ac_ni_hi-id' => 'ACNI-'.Str::uuid()->toString(),
+                    'ac_ni_hi-tenant_id' => $tenantId,
+                    'ac_ni_hi-ac_de_pl_id-fk' => $activationId,
+                    'ac_ni_hi-ni_al_id-fk' => $newLevelId,
+                    'ac_ni_hi-ac_se_id-fk' => $actionSetId,
+                    'ac_ni_hi-fech_ini' => now()->toDateString(),
+                    'ac_ni_hi-hora_ini' => now()->toTimeString(),
+                    'ac_ni_hi-fech_fin' => null,
+                    'ac_ni_hi-hora_fin' => null,
+                    'ac_ni_hi-nivel_inicial' => 'NO',
+                    'ac_ni_hi-per_id-fk-registrador' => $perId,
+                    'ac_ni_hi-rol_id-fk-registrador' => $rolId,
+                    'ac_ni_hi-fuente_cambio' => 'manual',
+                    'ac_ni_hi-activo' => 'SI',
+                    'ac_ni_hi-justificacion' => $justification,
+                ]);
+            }
+
+            $createdCount = 0;
+            if ($actionSetId && Schema::hasTable('accion_set_detalle_cfg')) {
+                $detalles = DB::table('accion_set_detalle_cfg')
+                    ->when(
+                        Schema::hasColumn('accion_set_detalle_cfg', 'ac_se_de-tenant_id'),
+                        static fn ($q) => $q->where('ac_se_de-tenant_id', $tenantId),
+                    )
+                    ->where('ac_se_de-ac_se_id-fk', $actionSetId)
+                    ->whereRaw("UPPER(COALESCE(`ac_se_de-activo`, 'SI')) <> 'NO'")
+                    ->orderByRaw("CAST(COALESCE(`ac_se_de-ord_ejec`, '999') AS UNSIGNED) ASC")
+                    ->orderBy('ac_se_de-id')
+                    ->get();
+
+                foreach ($detalles as $detalle) {
+                    $detalleId = $detalle->{'ac_se_de-id'};
+                    $grOpId = trim((string) ($detalle->{'ac_se_de-gr_op_id-fk'} ?? ''));
+
+                    $asignacionId = null;
+                    if (Schema::hasTable('asignacion_en_funciones_trs')) {
+                        $existingAsign = DB::table('asignacion_en_funciones_trs')
+                            ->when(
+                                Schema::hasColumn('asignacion_en_funciones_trs', 'as_en_fu-tenant_id'),
+                                static fn ($q) => $q->where('as_en_fu-tenant_id', $tenantId),
+                            )
+                            ->where('as_en_fu-ac_de_pl_id-fk', $activationId)
+                            ->where('as_en_fu-gr_op_id-fk', $grOpId)
+                            ->orderBy('as_en_fu-ts_ini', 'desc')
+                            ->first();
+
+                        if ($existingAsign) {
+                            $asignacionId = $existingAsign->{'as_en_fu-id'};
+                        } else {
+                            $defaultPerId = null;
+                            if (Schema::hasTable('persona_rol_grupo_cfg')) {
+                                $default = DB::table('persona_rol_grupo_cfg')
+                                    ->when(
+                                        Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-tenant_id'),
+                                        static fn ($q) => $q->where('pe_ro_gr-tenant_id', $tenantId),
+                                    )
+                                    ->where('pe_ro_gr-gr_op_id-fk', $grOpId)
+                                    ->whereRaw("UPPER(COALESCE(`pe_ro_gr-activo`, 'SI')) <> 'NO'")
+                                    ->first();
+                                $defaultPerId = $default ? $default->{'pe_ro_gr-per_id-fk'} : null;
+                            }
+
+                            $asignacionId = 'ASEF-'.Str::uuid()->toString();
+                            DB::table('asignacion_en_funciones_trs')->insert([
+                                'as_en_fu-id' => $asignacionId,
+                                'as_en_fu-tenant_id' => $tenantId,
+                                'as_en_fu-ac_de_pl_id-fk' => $activationId,
+                                'as_en_fu-gr_op_id-fk' => $grOpId,
+                                'as_en_fu-per_id-fk' => $defaultPerId,
+                                'as_en_fu-tipo_asignacion' => 'TITULAR',
+                                'as_en_fu-motivo' => 'GENERACION_AUTOMATICA_CAMBIO_NIVEL',
+                                'as_en_fu-ts_ini' => now()->toDateTimeString(),
+                                'as_en_fu-estado' => 'ACTIVA',
+                            ]);
+                        }
+                    }
+
+                    if (Schema::hasTable('ejecucion_accion_trs')) {
+                        DB::table('ejecucion_accion_trs')->insert([
+                            'ej_ac-id' => 'EJAC-'.Str::uuid()->toString(),
+                            'ej_ac-tenant_id' => $tenantId,
+                            'ej_ac-ac_de_pl_id-fk' => $activationId,
+                            'ej_ac-gr_op_id-fk' => $grOpId,
+                            'ej_ac-ac_se_de_id-fk' => $detalleId,
+                            'ej_ac-as_en_fu_id-fk' => $asignacionId,
+                            'ej_ac-estado' => 'PENDIENTE',
+                            'ej_ac-ts_ini' => now()->toDateTimeString(),
+                            'ej_ac-observ' => 'Regenerado por cambio de nivel',
+                        ]);
+                        $createdCount++;
+                    }
+                }
+            }
+
+            return response()->json([
+                'message' => 'Level changed successfully.',
+                'new_level_id' => $newLevelId,
+                'actions_created' => $createdCount,
+            ]);
+        });
+    }
+
     public function controlPanel(Request $request, string $activationId): JsonResponse
     {
         $tenantId = $this->tenantContext->tenantId();
@@ -1983,19 +2206,6 @@ class ActivationController extends Controller
 
         if (! $activationExists) {
             return response()->json(['message' => 'Activation not found.'], 404);
-        }
-
-        $grupos = [];
-        if (Schema::hasTable('grupo_operativo_cat')) {
-            $grupos = DB::table('grupo_operativo_cat')
-                ->when(
-                    Schema::hasColumn('grupo_operativo_cat', 'gr_op-tenant_id'),
-                    static fn ($q) => $q->where('gr_op-tenant_id', $tenantId),
-                )
-                ->orderByRaw("CAST(COALESCE(`gr_op-ord_vis`, '0') AS UNSIGNED) ASC")
-                ->orderBy('gr_op-id')
-                ->get()
-                ->all();
         }
 
         $nivelRow = null;
@@ -2031,6 +2241,8 @@ class ActivationController extends Controller
 
         $doneCountByGrupo = [];
         $totalCountByGrupo = [];
+        $involvedGroupIds = [];
+
         if (Schema::hasTable('ejecucion_accion_trs')) {
             $ejecuciones = DB::table('ejecucion_accion_trs')
                 ->when(
@@ -2045,14 +2257,31 @@ class ActivationController extends Controller
                 if ($gid === '') {
                     continue;
                 }
-                $totalCountByGrupo[$gid] = ($totalCountByGrupo[$gid] ?? 0) + 1;
+                $safeKey = Str::slug($gid);
+                $totalCountByGrupo[$safeKey] = ($totalCountByGrupo[$safeKey] ?? 0) + 1;
+                $involvedGroupIds[$gid] = true;
                 $estado = strtoupper(trim((string) ($e->{'ej_ac-estado'} ?? '')));
                 $done = $estado === 'REALIZADA' || $estado === 'REALIZADO' || (string) ($e->{'ej_ac-ts_fin'} ?? '') !== '';
-                if (! $done) {
-                    continue;
+                if ($done) {
+                    $doneCountByGrupo[$safeKey] = ($doneCountByGrupo[$safeKey] ?? 0) + 1;
                 }
-                $doneCountByGrupo[$gid] = ($doneCountByGrupo[$gid] ?? 0) + 1;
             }
+        }
+
+        $involvedGroupIds = array_keys($involvedGroupIds);
+
+        $grupos = [];
+        if (Schema::hasTable('grupo_operativo_cat') && ! empty($involvedGroupIds)) {
+            $grupos = DB::table('grupo_operativo_cat')
+                ->when(
+                    Schema::hasColumn('grupo_operativo_cat', 'gr_op-tenant_id'),
+                    static fn ($q) => $q->where('gr_op-tenant_id', $tenantId),
+                )
+                ->whereIn('gr_op-id', $involvedGroupIds)
+                ->orderByRaw("CAST(COALESCE(`gr_op-ord_vis`, '0') AS UNSIGNED) ASC")
+                ->orderBy('gr_op-id')
+                ->get()
+                ->all();
         }
 
         $lastNotificationByPerson = [];
@@ -2138,7 +2367,7 @@ class ActivationController extends Controller
                 ]);
 
             foreach ($asignaciones as $a) {
-                $gid = trim((string) ($a->{'as_en_fu-gr_op_id-fk'} ?? ''));
+                $gid = strtoupper(trim((string) ($a->{'as_en_fu-gr_op_id-fk'} ?? '')));
                 $perId = trim((string) ($a->{'as_en_fu-per_id-fk'} ?? ''));
                 if ($gid === '' || $perId === '') {
                     continue;
@@ -2178,7 +2407,8 @@ class ActivationController extends Controller
             if ($gid === '') {
                 continue;
             }
-            $entry = $assignByGrupo[$gid] ?? ['TITULAR' => [], 'SUPLENTE' => []];
+            $safeKey = Str::slug($gid);
+            $entry = $assignByGrupo[strtoupper($gid)] ?? ['TITULAR' => [], 'SUPLENTE' => []];
             usort($entry['TITULAR'], static fn ($a, $b) => strcmp((string) ($b['ts_ini'] ?? ''), (string) ($a['ts_ini'] ?? '')));
             usort($entry['SUPLENTE'], static fn ($a, $b) => strcmp((string) ($b['ts_ini'] ?? ''), (string) ($a['ts_ini'] ?? '')));
             $titular = $entry['TITULAR'][0]['persona'] ?? null;
@@ -2187,10 +2417,10 @@ class ActivationController extends Controller
                 array_slice($entry['SUPLENTE'], 0, 2),
             ));
 
-            $done = (int) ($doneCountByGrupo[$gid] ?? 0);
-            $totalForGrupo = (int) ($totalCountByGrupo[$gid] ?? 0);
+            $done = (int) ($doneCountByGrupo[$safeKey] ?? 0);
+            $totalForGrupo = (int) ($totalCountByGrupo[$safeKey] ?? 0);
             if ($totalForGrupo <= 0) {
-                $totalForGrupo = $totalAcciones;
+                continue;
             }
             $pendingForGrupo = max(0, $totalForGrupo - $done);
             $percent = $totalForGrupo > 0 ? (int) min(100, round(($done / $totalForGrupo) * 100)) : 0;
