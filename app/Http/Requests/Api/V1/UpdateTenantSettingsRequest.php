@@ -32,6 +32,7 @@ class UpdateTenantSettingsRequest extends FormRequest
             'default_language' => ['sometimes', Rule::in(LanguageService::SUPPORTED)],
             'languages' => ['sometimes', 'array', 'min:1'],
             'languages.*' => ['required', Rule::in(LanguageService::SUPPORTED)],
+            'conformacion_tiempo_limite' => ['sometimes', 'nullable', 'integer', 'min:0'],
         ];
     }
 }

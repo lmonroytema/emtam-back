@@ -65,6 +65,7 @@ class TenantSettingsController extends Controller
                 'gps_min_lng' => $tenant->gps_min_lng,
                 'gps_max_lng' => $tenant->gps_max_lng,
                 'default_language' => $tenant->default_language,
+                'conformacion_tiempo_limite' => $tenant->conformacion_tiempo_limite ?? 0,
                 'languages' => $enabled,
             ],
         ]);
@@ -167,6 +168,9 @@ class TenantSettingsController extends Controller
             'gps_min_lng' => $data['gps_min_lng'] ?? $tenant->gps_min_lng,
             'gps_max_lng' => $data['gps_max_lng'] ?? $tenant->gps_max_lng,
             'default_language' => $data['default_language'] ?? $tenant->default_language,
+            'conformacion_tiempo_limite' => array_key_exists('conformacion_tiempo_limite', $data)
+                ? (int) $data['conformacion_tiempo_limite']
+                : ($tenant->conformacion_tiempo_limite ?? 0),
         ])->save();
 
         $this->ensureDefaultLanguageEnabled($tenant);
@@ -235,6 +239,7 @@ class TenantSettingsController extends Controller
                 'gps_min_lng' => $tenant->gps_min_lng,
                 'gps_max_lng' => $tenant->gps_max_lng,
                 'default_language' => $tenant->default_language,
+                'conformacion_tiempo_limite' => $tenant->conformacion_tiempo_limite ?? 0,
                 'languages' => $enabled,
             ],
         ]);

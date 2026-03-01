@@ -1357,7 +1357,24 @@ class ActivationController extends Controller
                 'ac.ac_op-descrip as accion_descrip',
                 'ac.ac_op-cod as accion_cod',
                 'de.ac_se_de-id as accion_detalle_id',
+                'de.ac_se_de-dependencia_id-fk as dependencia_id',
             ]);
+
+        $dependencyIds = $rows->pluck('dependencia_id')->filter()->unique()->values()->all();
+        $dependencyStatus = [];
+        if (! empty($dependencyIds)) {
+            $dependencyStatus = DB::table('ejecucion_accion_trs')
+                ->where('ej_ac-tenant_id', $tenantId)
+                ->where('ej_ac-ac_de_pl_id-fk', $activationId)
+                ->whereIn('ej_ac-ac_se_de_id-fk', $dependencyIds)
+                ->get(['ej_ac-ac_se_de_id-fk', 'ej_ac-estado', 'ej_ac-ts_fin'])
+                ->mapWithKeys(function ($item) {
+                    $st = strtoupper(trim((string) ($item->{'ej_ac-estado'} ?? '')));
+                    $done = in_array($st, ['REALIZADA', 'REALIZADO', 'EJECUTADA', 'EJECUTADO'], true) || (string) ($item->{'ej_ac-ts_fin'} ?? '') !== '';
+                    return [(string) ($item->{'ej_ac-ac_se_de_id-fk'} ?? '') => $done];
+                })
+                ->all();
+        }
 
         $acciones = [];
         foreach ($rows as $r) {
@@ -1366,12 +1383,17 @@ class ActivationController extends Controller
             if ($tipo !== 'TITULAR') {
                 $tipo = 'SUPLENTE';
             }
+            $depId = trim((string) ($r->dependencia_id ?? ''));
+            $depMet = $depId === '' || ($dependencyStatus[$depId] ?? false);
+
             $acciones[] = [
                 'ejecucion_id' => (string) ($r->ejecucion_id ?? ''),
                 'accion_detalle_id' => (string) ($r->accion_detalle_id ?? ''),
                 'accion' => $accion,
                 'tipo_asignacion' => $tipo,
                 'estado' => (string) ($r->estado ?? ''),
+                'dependencia_id' => $depId,
+                'dependency_met' => $depMet,
             ];
         }
 
