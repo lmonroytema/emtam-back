@@ -10,7 +10,7 @@ class UpdateTenantUserRequest extends FormRequest
     public function rules(): array
     {
         $userId = $this->route('userId');
-        $profiles = ['admin', 'director', 'recurso', 'recurso-visor'];
+        $profiles = ['admin', 'director', 'recurso', 'recurso-visor', 'auditor'];
 
         return [
             'name' => ['sometimes', 'string', 'min:1'],

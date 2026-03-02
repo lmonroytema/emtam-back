@@ -3,8 +3,11 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use App\Models\Tenant;
+use App\Services\AuditLogger;
 use App\Services\TenantContext;
+use Carbon\Carbon;
 use Illuminate\Http\Client\Response as HttpClientResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -21,6 +24,7 @@ class ActivationController extends Controller
 {
     public function __construct(
         private readonly TenantContext $tenantContext,
+        private readonly AuditLogger $auditLogger,
     ) {}
 
     public function store(Request $request): JsonResponse
@@ -57,7 +61,7 @@ class ActivationController extends Controller
 
         $activationId = 'ACPL-'.Str::uuid()->toString();
 
-        return DB::transaction(function () use ($data, $tenantId, $activationId) {
+        return DB::transaction(function () use ($data, $tenantId, $activationId, $request) {
             if (! Schema::hasTable('activacion_del_plan_trs')) {
                 return response()->json(['message' => 'Missing activacion_del_plan_trs table.'], 422);
             }
@@ -112,6 +116,21 @@ class ActivationController extends Controller
                 'ac_de_pl-mensaje_inic' => $data['mensaje_inic'] ?? null,
                 'ac_de_pl-mensaje_simul' => $data['mensaje_simul'] ?? null,
                 'ac_de_pl-observ' => $data['observ'] ?? null,
+            ]);
+
+            $this->auditLogger->logFromRequest($request, [
+                'event_type' => 'plan_activated',
+                'module' => 'activation',
+                'plan_id' => $activationId,
+                'entity_id' => $activationId,
+                'entity_type' => 'activacion_del_plan_trs',
+                'new_value' => [
+                    'ti_em_id' => $data['ti_em_id'],
+                    'rie_id' => $data['rie_id'],
+                    'ni_al_id' => $data['ni_al_id'],
+                    'estado' => $data['estado'],
+                    'scenario' => $scenario,
+                ],
             ]);
 
             $now = now()->toDateTimeString();
@@ -2007,7 +2026,7 @@ class ActivationController extends Controller
             return response()->json(['message' => 'Missing activacion_del_plan_trs table.'], 422);
         }
 
-        return DB::transaction(function () use ($tenantId, $activationId, $newLevelId, $perId, $rolId, $justification) {
+        return DB::transaction(function () use ($tenantId, $activationId, $newLevelId, $perId, $rolId, $justification, $request) {
             $activation = DB::table('activacion_del_plan_trs')
                 ->where('ac_de_pl-tenant_id', $tenantId)
                 ->where('ac_de_pl-id', $activationId)
@@ -2018,6 +2037,19 @@ class ActivationController extends Controller
             }
 
             $riesgoId = trim((string) ($activation->{'ac_de_pl-rie_id-fk'} ?? ''));
+            $previousLevel = null;
+            if (Schema::hasTable('activacion_nivel_hist_trs')) {
+                $previousLevel = DB::table('activacion_nivel_hist_trs')
+                    ->when(
+                        Schema::hasColumn('activacion_nivel_hist_trs', 'ac_ni_hi-tenant_id'),
+                        static fn ($q) => $q->where('ac_ni_hi-tenant_id', $tenantId),
+                    )
+                    ->where('ac_ni_hi-ac_de_pl_id-fk', $activationId)
+                    ->whereRaw("UPPER(COALESCE(`ac_ni_hi-activo`, 'SI')) <> 'NO'")
+                    ->orderByDesc('ac_ni_hi-fech_ini')
+                    ->orderByDesc('ac_ni_hi-hora_ini')
+                    ->first();
+            }
 
             $niAl = null;
             if (Schema::hasTable('nivel_alerta_cat')) {
@@ -2193,6 +2225,23 @@ class ActivationController extends Controller
                 }
             }
 
+            $this->auditLogger->logFromRequest($request, [
+                'event_type' => 'level_changed',
+                'module' => 'activation',
+                'plan_id' => $activationId,
+                'entity_id' => $activationId,
+                'entity_type' => 'activacion_nivel_hist_trs',
+                'previous_value' => [
+                    'ni_al_id' => $previousLevel?->{'ac_ni_hi-ni_al_id-fk'} ?? null,
+                    'ac_se_id' => $previousLevel?->{'ac_ni_hi-ac_se_id-fk'} ?? null,
+                ],
+                'new_value' => [
+                    'ni_al_id' => $newLevelId,
+                    'ac_se_id' => $actionSetId,
+                ],
+                'justification' => $justification,
+            ]);
+
             return response()->json([
                 'message' => 'Level changed successfully.',
                 'new_level_id' => $newLevelId,
@@ -2228,6 +2277,26 @@ class ActivationController extends Controller
 
         if (! $activationExists) {
             return response()->json(['message' => 'Activation not found.'], 404);
+        }
+
+        $user = $request->user();
+        $perfil = strtolower(trim((string) ($user?->perfil ?? '')));
+        if ($perfil !== 'director') {
+            $allowed = false;
+            if ($user && Schema::hasTable('control_panel_access_trs')) {
+                $allowed = DB::table('control_panel_access_trs')
+                    ->where('tenant_id', $tenantId)
+                    ->where('activation_id', $activationId)
+                    ->where('user_id', $user->id)
+                    ->where(function ($q) {
+                        $q->whereNull('expires_at')->orWhere('expires_at', '>=', now()->toDateTimeString());
+                    })
+                    ->exists();
+            }
+
+            if (! $allowed) {
+                return response()->json(['message' => 'Access denied.'], 403);
+            }
         }
 
         $nivelRow = null;
@@ -2484,6 +2553,126 @@ class ActivationController extends Controller
         ]);
     }
 
+    public function grantControlPanelAccess(Request $request, string $activationId): JsonResponse
+    {
+        $tenantId = $this->tenantContext->tenantId();
+
+        if ($tenantId === null) {
+            return response()->json(['message' => __('messages.tenant.missing')], 422);
+        }
+
+        $user = $request->user();
+        $perfil = strtolower(trim((string) ($user?->perfil ?? '')));
+        if ($perfil !== 'director') {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
+        $activationId = trim($activationId);
+        if ($activationId === '') {
+            return response()->json(['message' => 'Invalid activation id.'], 422);
+        }
+
+        if (! Schema::hasTable('activacion_del_plan_trs')) {
+            return response()->json(['message' => 'Missing activacion_del_plan_trs table.'], 422);
+        }
+
+        $activationExists = DB::table('activacion_del_plan_trs')
+            ->when(
+                Schema::hasColumn('activacion_del_plan_trs', 'ac_de_pl-tenant_id'),
+                static fn ($q) => $q->where('ac_de_pl-tenant_id', $tenantId),
+            )
+            ->where('ac_de_pl-id', $activationId)
+            ->exists();
+
+        if (! $activationExists) {
+            return response()->json(['message' => 'Activation not found.'], 404);
+        }
+
+        $data = $request->validate([
+            'user_id' => ['required', 'integer'],
+            'expires_at' => ['nullable', 'date'],
+        ]);
+
+        if (! Schema::hasTable('control_panel_access_trs')) {
+            return response()->json(['message' => 'Missing control_panel_access_trs table.'], 422);
+        }
+
+        $targetUser = User::query()
+            ->where('tenant_id', $tenantId)
+            ->where('id', (int) $data['user_id'])
+            ->first();
+
+        if (! $targetUser) {
+            return response()->json(['message' => 'User not found.'], 404);
+        }
+
+        $expiresAt = $data['expires_at'] ?? null;
+        if ($expiresAt === null) {
+            $expiresAt = now()->addDay()->toDateTimeString();
+        } else {
+            $expiresAt = Carbon::parse($expiresAt)->toDateTimeString();
+        }
+
+        DB::table('control_panel_access_trs')->updateOrInsert(
+            [
+                'tenant_id' => $tenantId,
+                'activation_id' => $activationId,
+                'user_id' => $targetUser->id,
+            ],
+            [
+                'created_by_user_id' => $user?->id,
+                'expires_at' => $expiresAt,
+                'updated_at' => now()->toDateTimeString(),
+                'created_at' => now()->toDateTimeString(),
+            ],
+        );
+
+        return response()->json([
+            'message' => 'Access granted.',
+            'expires_at' => $expiresAt,
+        ]);
+    }
+
+    public function checkControlPanelAccess(Request $request, string $activationId): JsonResponse
+    {
+        $tenantId = $this->tenantContext->tenantId();
+
+        if ($tenantId === null) {
+            return response()->json(['message' => __('messages.tenant.missing')], 422);
+        }
+
+        $user = $request->user();
+        if (! $user) {
+            return response()->json(['message' => 'Unauthorized.'], 401);
+        }
+
+        $activationId = trim($activationId);
+        if ($activationId === '') {
+            return response()->json(['message' => 'Invalid activation id.'], 422);
+        }
+
+        $allowed = false;
+        $expiresAt = null;
+        if (Schema::hasTable('control_panel_access_trs')) {
+            $row = DB::table('control_panel_access_trs')
+                ->where('tenant_id', $tenantId)
+                ->where('activation_id', $activationId)
+                ->where('user_id', $user->id)
+                ->orderBy('id', 'desc')
+                ->first();
+
+            if ($row) {
+                $expiresAt = $row->expires_at;
+                $allowed = $row->expires_at === null || $row->expires_at >= now()->toDateTimeString();
+            }
+        }
+
+        return response()->json([
+            'allowed' => $allowed,
+            'expires_at' => $expiresAt,
+        ]);
+    }
+
     public function uploadDocuments(Request $request, string $activationId): JsonResponse
     {
         $tenantId = $this->tenantContext->tenantId();
@@ -2530,6 +2719,17 @@ class ActivationController extends Controller
                 'nombre' => $original,
                 'path' => $path,
             ];
+        }
+
+        if (! empty($documents)) {
+            $this->auditLogger->logFromRequest($request, [
+                'event_type' => 'document_uploaded',
+                'module' => 'documents',
+                'plan_id' => $activationId,
+                'entity_id' => $activationId,
+                'entity_type' => 'activacion_document',
+                'new_value' => $documents,
+            ]);
         }
 
         return response()->json([

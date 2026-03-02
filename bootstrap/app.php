@@ -24,6 +24,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'auth' => \App\Http\Middleware\Authenticate::class,
             'tenant' => \App\Http\Middleware\ResolveTenant::class,
             'setLocale' => \App\Http\Middleware\SetLocale::class,
+            'restrictAuditor' => \App\Http\Middleware\RestrictAuditor::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

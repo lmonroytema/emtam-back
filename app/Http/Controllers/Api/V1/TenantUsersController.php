@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\StoreTenantUserRequest;
 use App\Http\Requests\Api\V1\UpdateTenantUserRequest;
 use App\Models\User;
+use App\Services\AuditLogger;
 use App\Services\LanguageService;
 use App\Services\TenantContext;
 use Illuminate\Http\JsonResponse;
@@ -17,6 +18,7 @@ class TenantUsersController extends Controller
     public function __construct(
         private readonly TenantContext $tenantContext,
         private readonly LanguageService $languageService,
+        private readonly AuditLogger $auditLogger,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -66,6 +68,11 @@ class TenantUsersController extends Controller
 
         $data = $request->validated();
         $language = $data['language'] ?? null;
+        $currentUser = $request->user();
+        $perfil = strtolower(trim((string) ($data['perfil'] ?? '')));
+        if ($perfil === 'auditor' && strtolower(trim((string) ($currentUser?->perfil ?? ''))) !== 'admin') {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
 
         if (is_string($language) && $language !== '' && ! $this->languageService->isEnabledForTenant($tenantId, $language)) {
             return response()->json(['message' => __('messages.user.language_not_enabled')], 422);
@@ -77,7 +84,15 @@ class TenantUsersController extends Controller
             'email' => strtolower(trim((string) $data['email'])),
             'password' => Hash::make((string) $data['password']),
             'language' => $language ?: null,
-            'perfil' => $data['perfil'],
+            'perfil' => $perfil,
+        ]);
+
+        $this->auditLogger->logFromRequest($request, [
+            'event_type' => 'user_created',
+            'module' => 'users',
+            'entity_id' => (string) $user->id,
+            'entity_type' => 'User',
+            'new_value' => $user->only(['id', 'name', 'email', 'tenant_id', 'language', 'perfil']),
         ]);
 
         return response()->json([
@@ -99,6 +114,12 @@ class TenantUsersController extends Controller
         }
 
         $data = $request->validated();
+        $currentUser = $request->user();
+        $nextPerfil = array_key_exists('perfil', $data) ? strtolower(trim((string) ($data['perfil'] ?? ''))) : null;
+        if ($nextPerfil === 'auditor' && strtolower(trim((string) ($currentUser?->perfil ?? ''))) !== 'admin') {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+        $before = $user->only(['id', 'name', 'email', 'tenant_id', 'language', 'perfil']);
 
         if (array_key_exists('language', $data)) {
             $language = $data['language'];
@@ -121,10 +142,19 @@ class TenantUsersController extends Controller
         }
 
         if (array_key_exists('perfil', $data)) {
-            $user->perfil = $data['perfil'];
+            $user->perfil = $nextPerfil ?: null;
         }
 
         $user->save();
+
+        $this->auditLogger->logFromRequest($request, [
+            'event_type' => $before['perfil'] !== $user->perfil ? 'user_profile_changed' : 'user_updated',
+            'module' => 'users',
+            'entity_id' => (string) $user->id,
+            'entity_type' => 'User',
+            'previous_value' => $before,
+            'new_value' => $user->only(['id', 'name', 'email', 'tenant_id', 'language', 'perfil']),
+        ]);
 
         return response()->json([
             'message' => 'OK',
@@ -139,11 +169,24 @@ class TenantUsersController extends Controller
             return response()->json(['message' => __('messages.tenant.missing')], 422);
         }
 
+        $target = User::query()->where('tenant_id', $tenantId)->where('id', $userId)->first();
+        if ($target === null) {
+            return response()->json(['message' => 'Not found.'], 404);
+        }
+
         $deleted = User::query()->where('tenant_id', $tenantId)->where('id', $userId)->delete();
 
         if ($deleted === 0) {
             return response()->json(['message' => 'Not found.'], 404);
         }
+
+        $this->auditLogger->logFromRequest($request, [
+            'event_type' => 'user_deleted',
+            'module' => 'users',
+            'entity_id' => (string) $userId,
+            'entity_type' => 'User',
+            'previous_value' => $target->only(['id', 'name', 'email', 'tenant_id', 'language', 'perfil']),
+        ]);
 
         return response()->json(['message' => 'Deleted.']);
     }

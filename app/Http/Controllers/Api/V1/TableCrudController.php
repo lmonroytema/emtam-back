@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Services\AuditLogger;
 use App\Services\TableSchemaService;
 use App\Services\TenantContext;
 use Illuminate\Database\Query\Builder;
@@ -19,6 +20,7 @@ class TableCrudController extends Controller
     public function __construct(
         private readonly TableSchemaService $schema,
         private readonly TenantContext $tenantContext,
+        private readonly AuditLogger $auditLogger,
     ) {}
 
     public function tables(Request $request): JsonResponse
@@ -2041,6 +2043,12 @@ class TableCrudController extends Controller
             }
         }
 
+        $after = array_merge($payload, $pk);
+        $auditPayload = $this->auditPayloadForTable($table, $after, null);
+        if ($auditPayload !== null) {
+            $this->auditLogger->logFromRequest($request, $auditPayload);
+        }
+
         return response()->json([
             'table' => $table,
             'message' => 'Created.',
@@ -2225,6 +2233,11 @@ class TableCrudController extends Controller
             return response()->json(['message' => 'No fields to update.'], 422);
         }
 
+        $beforeQuery = DB::table($table);
+        $this->applyTenantScope($beforeQuery, $tenantColumn);
+        $this->applyPkWhere($beforeQuery, $request, $pkColumns);
+        $beforeRow = $beforeQuery->first();
+
         $query = DB::table($table);
         $this->applyTenantScope($query, $tenantColumn);
         $this->applyPkWhere($query, $request, $pkColumns);
@@ -2233,6 +2246,15 @@ class TableCrudController extends Controller
 
         if ($updated === 0) {
             return response()->json(['message' => 'Not found.'], 404);
+        }
+
+        if ($beforeRow) {
+            $before = (array) $beforeRow;
+            $after = array_merge($before, $payload);
+            $auditPayload = $this->auditPayloadForTable($table, $after, $before);
+            if ($auditPayload !== null) {
+                $this->auditLogger->logFromRequest($request, $auditPayload);
+            }
         }
 
         return response()->json([
@@ -2253,6 +2275,11 @@ class TableCrudController extends Controller
             return response()->json(['message' => 'Table has no primary key.'], 422);
         }
 
+        $beforeQuery = DB::table($table);
+        $this->applyTenantScope($beforeQuery, $tenantColumn);
+        $this->applyPkWhere($beforeQuery, $request, $pkColumns);
+        $beforeRow = $beforeQuery->first();
+
         $query = DB::table($table);
         $this->applyTenantScope($query, $tenantColumn);
         $this->applyPkWhere($query, $request, $pkColumns);
@@ -2263,10 +2290,114 @@ class TableCrudController extends Controller
             return response()->json(['message' => 'Not found.'], 404);
         }
 
+        if ($beforeRow) {
+            $before = (array) $beforeRow;
+            $auditPayload = $this->auditPayloadForTable($table, $before, $before);
+            if ($auditPayload !== null) {
+                $this->auditLogger->logFromRequest($request, $auditPayload);
+            }
+        }
+
         return response()->json([
             'table' => $table,
             'message' => 'Deleted.',
         ]);
+    }
+
+    private function auditPayloadForTable(string $table, array $after, ?array $before): ?array
+    {
+        if ($table === 'activacion_del_plan_trs') {
+            $planId = (string) ($after['ac_de_pl-id'] ?? $before['ac_de_pl-id'] ?? '');
+            if ($planId === '') {
+                return null;
+            }
+            if ($before === null) {
+                return [
+                    'event_type' => 'plan_created',
+                    'module' => 'activation',
+                    'plan_id' => $planId,
+                    'entity_id' => $planId,
+                    'entity_type' => $table,
+                    'new_value' => $after,
+                ];
+            }
+            $prevState = (string) ($before['ac_de_pl-estado'] ?? '');
+            $nextState = (string) ($after['ac_de_pl-estado'] ?? $prevState);
+            if ($prevState !== $nextState) {
+                return [
+                    'event_type' => 'plan_status_changed',
+                    'module' => 'activation',
+                    'plan_id' => $planId,
+                    'entity_id' => $planId,
+                    'entity_type' => $table,
+                    'previous_value' => ['estado' => $prevState],
+                    'new_value' => ['estado' => $nextState],
+                ];
+            }
+            return null;
+        }
+
+        if ($table === 'ejecucion_accion_trs') {
+            $planId = (string) ($after['ej_ac-ac_de_pl_id-fk'] ?? $before['ej_ac-ac_de_pl_id-fk'] ?? '');
+            $entityId = (string) ($after['ej_ac-id'] ?? $before['ej_ac-id'] ?? '');
+            if ($before === null) {
+                return [
+                    'event_type' => 'action_created',
+                    'module' => 'actions',
+                    'plan_id' => $planId !== '' ? $planId : null,
+                    'entity_id' => $entityId !== '' ? $entityId : null,
+                    'entity_type' => $table,
+                    'new_value' => $after,
+                ];
+            }
+            $prevState = (string) ($before['ej_ac-estado'] ?? '');
+            $nextState = (string) ($after['ej_ac-estado'] ?? $prevState);
+            if ($prevState !== $nextState) {
+                return [
+                    'event_type' => 'action_status_changed',
+                    'module' => 'actions',
+                    'plan_id' => $planId !== '' ? $planId : null,
+                    'entity_id' => $entityId !== '' ? $entityId : null,
+                    'entity_type' => $table,
+                    'previous_value' => ['estado' => $prevState],
+                    'new_value' => ['estado' => $nextState],
+                ];
+            }
+            return null;
+        }
+
+        if ($table === 'asignacion_en_funciones_trs') {
+            $planId = (string) ($after['as_en_fu-ac_de_pl_id-fk'] ?? $before['as_en_fu-ac_de_pl_id-fk'] ?? '');
+            $entityId = (string) ($after['as_en_fu-id'] ?? $before['as_en_fu-id'] ?? '');
+            if ($before === null) {
+                return [
+                    'event_type' => 'delegation_created',
+                    'module' => 'delegations',
+                    'plan_id' => $planId !== '' ? $planId : null,
+                    'entity_id' => $entityId !== '' ? $entityId : null,
+                    'entity_type' => $table,
+                    'new_value' => $after,
+                ];
+            }
+            $prevPer = (string) ($before['as_en_fu-per_id-fk'] ?? '');
+            $nextPer = (string) ($after['as_en_fu-per_id-fk'] ?? $prevPer);
+            $prevState = (string) ($before['as_en_fu-estado'] ?? '');
+            $nextState = (string) ($after['as_en_fu-estado'] ?? $prevState);
+            if ($prevPer !== $nextPer || $prevState !== $nextState) {
+                return [
+                    'event_type' => 'delegation_updated',
+                    'module' => 'delegations',
+                    'plan_id' => $planId !== '' ? $planId : null,
+                    'entity_id' => $entityId !== '' ? $entityId : null,
+                    'entity_type' => $table,
+                    'previous_value' => ['per_id' => $prevPer, 'estado' => $prevState],
+                    'new_value' => ['per_id' => $nextPer, 'estado' => $nextState],
+                ];
+            }
+            return null;
+        }
+
+        return null;
     }
 
     private function applyTenantScope(Builder $query, ?string $tenantColumn): void

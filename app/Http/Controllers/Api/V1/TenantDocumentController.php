@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Services\AuditLogger;
 use App\Services\TenantContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -15,7 +16,10 @@ use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class TenantDocumentController extends Controller
 {
-    public function __construct(private readonly TenantContext $tenantContext) {}
+    public function __construct(
+        private readonly TenantContext $tenantContext,
+        private readonly AuditLogger $auditLogger,
+    ) {}
 
     public function listFolders(): JsonResponse
     {
@@ -69,6 +73,14 @@ class TenantDocumentController extends Controller
             'updated_at' => now(),
         ]);
 
+        $this->auditLogger->logFromRequest($request, [
+            'event_type' => 'document_folder_created',
+            'module' => 'documents',
+            'entity_id' => (string) $id,
+            'entity_type' => 'tenant_document_folder',
+            'new_value' => ['id' => $id, 'name' => trim((string) $data['name'])],
+        ]);
+
         return response()->json(['id' => $id, 'message' => 'OK']);
     }
 
@@ -98,6 +110,14 @@ class TenantDocumentController extends Controller
         if ($updated === 0) {
             return response()->json(['message' => 'Folder not found.'], 404);
         }
+
+        $this->auditLogger->logFromRequest($request, [
+            'event_type' => 'document_folder_updated',
+            'module' => 'documents',
+            'entity_id' => (string) $folderId,
+            'entity_type' => 'tenant_document_folder',
+            'new_value' => ['id' => $folderId, 'name' => trim((string) $data['name'])],
+        ]);
 
         return response()->json(['message' => 'OK']);
     }
@@ -148,6 +168,14 @@ class TenantDocumentController extends Controller
         if ($deleted === 0) {
             return response()->json(['message' => 'Folder not found.'], 404);
         }
+
+        $this->auditLogger->logFromRequest($request, [
+            'event_type' => 'document_folder_deleted',
+            'module' => 'documents',
+            'entity_id' => (string) $folderId,
+            'entity_type' => 'tenant_document_folder',
+            'previous_value' => ['id' => $folderId, 'documents' => $docs->pluck('id')->all()],
+        ]);
 
         return response()->json(['message' => 'OK']);
     }
@@ -344,6 +372,16 @@ class TenantDocumentController extends Controller
             }
         }
 
+        if (! empty($created)) {
+            $this->auditLogger->logFromRequest($request, [
+                'event_type' => 'document_uploaded',
+                'module' => 'documents',
+                'entity_id' => (string) $folderId,
+                'entity_type' => 'tenant_document',
+                'new_value' => ['folder_id' => $folderId, 'document_ids' => $created],
+            ]);
+        }
+
         return response()->json(['message' => 'OK', 'ids' => $created]);
     }
 
@@ -402,6 +440,14 @@ class TenantDocumentController extends Controller
             }
         }
 
+        $this->auditLogger->logFromRequest($request, [
+            'event_type' => 'document_updated',
+            'module' => 'documents',
+            'entity_id' => (string) $documentId,
+            'entity_type' => 'tenant_document',
+            'new_value' => ['id' => $documentId, 'name' => trim((string) $data['name']), 'risk_ids' => $data['risk_ids'] ?? []],
+        ]);
+
         return response()->json(['message' => 'OK']);
     }
 
@@ -419,7 +465,7 @@ class TenantDocumentController extends Controller
         $doc = DB::table('tenant_documents')
             ->where('id', $documentId)
             ->where('tenant_id', $tenantId)
-            ->first(['path']);
+            ->first(['path', 'name']);
 
         if (! $doc) {
             return response()->json(['message' => 'Document not found.'], 404);
@@ -441,6 +487,18 @@ class TenantDocumentController extends Controller
             ->where('id', $documentId)
             ->where('tenant_id', $tenantId)
             ->delete();
+
+        $this->auditLogger->logFromRequest($request, [
+            'event_type' => 'document_deleted',
+            'module' => 'documents',
+            'entity_id' => (string) $documentId,
+            'entity_type' => 'tenant_document',
+            'previous_value' => [
+                'id' => $documentId,
+                'name' => $doc?->name ?? null,
+                'path' => $doc?->path ?? null,
+            ],
+        ]);
 
         return response()->json(['message' => 'OK']);
     }

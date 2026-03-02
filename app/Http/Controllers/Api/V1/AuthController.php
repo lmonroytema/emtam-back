@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Api\V1\LoginRequest;
 use App\Models\User;
+use App\Services\AuditLogger;
+use App\Services\TenantContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -12,6 +14,11 @@ use Illuminate\Support\Facades\Schema;
 
 class AuthController extends Controller
 {
+    public function __construct(
+        private readonly TenantContext $tenantContext,
+        private readonly AuditLogger $auditLogger,
+    ) {}
+
     public function login(LoginRequest $request): JsonResponse
     {
         $email = strtolower(trim((string) $request->validated('email')));
@@ -58,6 +65,14 @@ class AuthController extends Controller
                 'message' => __('messages.auth.invalid_credentials'),
             ], 422);
         }
+
+        $tenantId = $user->tenant_id ?? $this->tenantContext->tenantId();
+        $this->auditLogger->logForUser($user, $tenantId, $request->ip(), [
+            'event_type' => 'user_login',
+            'module' => 'auth',
+            'entity_id' => (string) $user->id,
+            'entity_type' => 'User',
+        ]);
 
         return response()->json([
             'token' => $user->createToken('api')->plainTextToken,

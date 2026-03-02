@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\V1\ActivationController;
+use App\Http\Controllers\Api\V1\AuditController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\TableCrudController;
 use App\Http\Controllers\Api\V1\TenantDocumentController;
@@ -15,10 +16,12 @@ Route::prefix('v1')->group(function () {
     Route::post('auth/login', [AuthController::class, 'login']);
     Route::get('tenant/{tenantId}/logo', [TenantSettingsController::class, 'publicLogo']);
 
-    Route::middleware(['auth:sanctum'])->group(function () {
+    Route::middleware(['auth:sanctum', 'restrictAuditor'])->group(function () {
         Route::post('activacion', [ActivationController::class, 'store']);
         Route::get('activacion/preview', [ActivationController::class, 'preview']);
         Route::get('activacion/{activationId}/control', [ActivationController::class, 'controlPanel']);
+        Route::get('activacion/{activationId}/control/access', [ActivationController::class, 'checkControlPanelAccess']);
+        Route::post('activacion/{activationId}/control/access', [ActivationController::class, 'grantControlPanelAccess']);
         Route::put('activacion/{activationId}/nivel', [ActivationController::class, 'changeLevel']);
         Route::post('activacion/{activationId}/notificaciones/enviar', [ActivationController::class, 'sendNotifications']);
         Route::post('activacion/{activationId}/notificaciones/fin', [ActivationController::class, 'sendEndNotifications']);
@@ -64,5 +67,9 @@ Route::prefix('v1')->group(function () {
         Route::put('tenant/documents/{documentId}', [TenantDocumentController::class, 'updateDocument']);
         Route::delete('tenant/documents/{documentId}', [TenantDocumentController::class, 'deleteDocument']);
         Route::get('tenant/documents/{documentId}/download', [TenantDocumentController::class, 'downloadDocument']);
+
+        Route::get('audit', [AuditController::class, 'index']);
+        Route::get('audit/filters', [AuditController::class, 'filters']);
+        Route::get('audit/responsibilities', [AuditController::class, 'responsibilities']);
     });
 });

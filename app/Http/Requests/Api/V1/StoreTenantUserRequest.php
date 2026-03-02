@@ -9,7 +9,7 @@ class StoreTenantUserRequest extends FormRequest
 {
     public function rules(): array
     {
-        $profiles = ['admin', 'director', 'recurso', 'recurso-visor'];
+        $profiles = ['admin', 'director', 'recurso', 'recurso-visor', 'auditor'];
 
         return [
             'name' => ['required', 'string', 'min:1'],
