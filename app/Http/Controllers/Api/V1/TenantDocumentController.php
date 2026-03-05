@@ -524,13 +524,17 @@ class TenantDocumentController extends Controller
         }
 
         $path = (string) ($doc->path ?? '');
-        if ($path === '' || ! Storage::disk('local')->exists($path)) {
-            abort(404, 'File missing.');
+        $filename = (string) ($doc->original_name ?? 'documento');
+        if ($path !== '' && Storage::disk('local')->exists($path)) {
+            $absolutePath = Storage::disk('local')->path($path);
+            return response()->download($absolutePath, $filename);
         }
 
-        $filename = (string) ($doc->original_name ?? 'documento');
-        $absolutePath = Storage::disk('local')->path($path);
+        if ($path !== '' && Storage::disk('public')->exists($path)) {
+            $absolutePath = Storage::disk('public')->path($path);
+            return response()->download($absolutePath, $filename);
+        }
 
-        return response()->download($absolutePath, $filename);
+        abort(404, 'File missing.');
     }
 }

@@ -58,6 +58,7 @@ class TenantSettingsController extends Controller
                 'notifications_message_simulacrum' => $tenant->notifications_message_simulacrum,
                 'notifications_message_phase2' => $tenant->notifications_message_phase2,
                 'notifications_include_credentials' => (bool) ($tenant->notifications_include_credentials ?? false),
+                'two_factor_enabled' => (bool) ($tenant->two_factor_enabled ?? false),
                 'logo_path' => $tenant->logo_path,
                 'logo_url' => $logoUrl,
                 'gps_min_lat' => $tenant->gps_min_lat,
@@ -163,7 +164,11 @@ class TenantSettingsController extends Controller
             'notifications_include_credentials' => array_key_exists('notifications_include_credentials', $data)
                 ? (bool) $data['notifications_include_credentials']
                 : (bool) ($tenant->notifications_include_credentials ?? false),
+            'two_factor_enabled' => array_key_exists('two_factor_enabled', $data)
+                ? (bool) $data['two_factor_enabled']
+                : (bool) ($tenant->two_factor_enabled ?? false),
             'gps_min_lat' => $data['gps_min_lat'] ?? $tenant->gps_min_lat,
+            'gps_max_lat' => $data['gps_max_lat'] ?? $tenant->gps_max_lat,
             'gps_max_lat' => $data['gps_max_lat'] ?? $tenant->gps_max_lat,
             'gps_min_lng' => $data['gps_min_lng'] ?? $tenant->gps_min_lng,
             'gps_max_lng' => $data['gps_max_lng'] ?? $tenant->gps_max_lng,
@@ -232,6 +237,7 @@ class TenantSettingsController extends Controller
                 'notifications_message_simulacrum' => $tenant->notifications_message_simulacrum,
                 'notifications_message_phase2' => $tenant->notifications_message_phase2,
                 'notifications_include_credentials' => (bool) ($tenant->notifications_include_credentials ?? false),
+                'two_factor_enabled' => (bool) ($tenant->two_factor_enabled ?? false),
                 'logo_path' => $tenant->logo_path,
                 'logo_url' => $logoUrl,
                 'gps_min_lat' => $tenant->gps_min_lat,

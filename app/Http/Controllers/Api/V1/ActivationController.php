@@ -1297,6 +1297,180 @@ class ActivationController extends Controller
         ]);
     }
 
+    public function resetActivations(Request $request): JsonResponse
+    {
+        $tenantId = $this->tenantContext->tenantId();
+        if ($tenantId === null) {
+            return response()->json(['message' => __('messages.tenant.missing')], 422);
+        }
+
+        $user = $request->user();
+        $perfil = strtolower(trim((string) ($user?->perfil ?? '')));
+        if ($perfil !== 'admin') {
+            return response()->json(['message' => 'Forbidden.'], 403);
+        }
+
+        if (! Schema::hasTable('activacion_del_plan_trs')) {
+            return response()->json(['message' => 'Missing activacion_del_plan_trs table.'], 422);
+        }
+
+        $states = ['ACTIVA', 'ACTIVADA', 'FINALIZADA', 'FINALIZADO', 'CERRADA', 'CERRADO'];
+        $activationIds = DB::table('activacion_del_plan_trs')
+            ->when(
+                Schema::hasColumn('activacion_del_plan_trs', 'ac_de_pl-tenant_id'),
+                static fn ($q) => $q->where('ac_de_pl-tenant_id', $tenantId),
+            )
+            ->whereIn(DB::raw("UPPER(COALESCE(`ac_de_pl-estado`, ''))"), $states)
+            ->pluck('ac_de_pl-id')
+            ->map(static fn ($id) => trim((string) $id))
+            ->filter(static fn ($id) => $id !== '')
+            ->values();
+
+        if ($activationIds->isEmpty()) {
+            return response()->json([
+                'message' => 'OK',
+                'deleted' => [
+                    'activaciones' => 0,
+                ],
+            ]);
+        }
+
+        $deleted = DB::transaction(function () use ($activationIds, $tenantId) {
+            $counts = [
+                'control_panel_access' => 0,
+                'notificacion_confirmacion' => 0,
+                'notificacion_envio' => 0,
+                'notas_operativas' => 0,
+                'ejecucion_accion' => 0,
+                'asignacion_en_funciones' => 0,
+                'activacion_nivel_hist' => 0,
+                'cronologia_emergencia' => 0,
+                'activaciones' => 0,
+            ];
+
+            if (Schema::hasTable('control_panel_access_trs')) {
+                $counts['control_panel_access'] = DB::table('control_panel_access_trs')
+                    ->where('tenant_id', $tenantId)
+                    ->whereIn('activation_id', $activationIds)
+                    ->delete();
+            }
+
+            $notificacionEnvioIds = collect();
+            if (Schema::hasTable('notificacion_envio_trs')) {
+                $notificacionEnvioIds = DB::table('notificacion_envio_trs')
+                    ->when(
+                        Schema::hasColumn('notificacion_envio_trs', 'no_en-tenant_id'),
+                        static fn ($q) => $q->where('no_en-tenant_id', $tenantId),
+                    )
+                    ->whereIn('no_en-ac_de_pl_id-fk', $activationIds)
+                    ->pluck('no_en-id')
+                    ->map(static fn ($id) => trim((string) $id))
+                    ->filter(static fn ($id) => $id !== '')
+                    ->values();
+
+                $counts['notificacion_envio'] = DB::table('notificacion_envio_trs')
+                    ->when(
+                        Schema::hasColumn('notificacion_envio_trs', 'no_en-tenant_id'),
+                        static fn ($q) => $q->where('no_en-tenant_id', $tenantId),
+                    )
+                    ->whereIn('no_en-ac_de_pl_id-fk', $activationIds)
+                    ->delete();
+            }
+
+            if (Schema::hasTable('notificacion_confirmacion_trs') && $notificacionEnvioIds->isNotEmpty()) {
+                $counts['notificacion_confirmacion'] = DB::table('notificacion_confirmacion_trs')
+                    ->when(
+                        Schema::hasColumn('notificacion_confirmacion_trs', 'no_co-tenant_id'),
+                        static fn ($q) => $q->where('no_co-tenant_id', $tenantId),
+                    )
+                    ->whereIn('no_co-no_en_id-fk', $notificacionEnvioIds)
+                    ->delete();
+            }
+
+            if (Schema::hasTable('notas_operativas_trs')) {
+                $counts['notas_operativas'] = DB::table('notas_operativas_trs')
+                    ->when(
+                        Schema::hasColumn('notas_operativas_trs', 'no_op-tenant_id'),
+                        static fn ($q) => $q->where('no_op-tenant_id', $tenantId),
+                    )
+                    ->whereIn('no_op-ac_de_pl_id-fk', $activationIds)
+                    ->delete();
+            }
+
+            if (Schema::hasTable('ejecucion_accion_trs')) {
+                $counts['ejecucion_accion'] = DB::table('ejecucion_accion_trs')
+                    ->when(
+                        Schema::hasColumn('ejecucion_accion_trs', 'ej_ac-tenant_id'),
+                        static fn ($q) => $q->where('ej_ac-tenant_id', $tenantId),
+                    )
+                    ->whereIn('ej_ac-ac_de_pl_id-fk', $activationIds)
+                    ->delete();
+            }
+
+            if (Schema::hasTable('asignacion_en_funciones_trs')) {
+                $counts['asignacion_en_funciones'] = DB::table('asignacion_en_funciones_trs')
+                    ->when(
+                        Schema::hasColumn('asignacion_en_funciones_trs', 'as_en_fu-tenant_id'),
+                        static fn ($q) => $q->where('as_en_fu-tenant_id', $tenantId),
+                    )
+                    ->whereIn('as_en_fu-ac_de_pl_id-fk', $activationIds)
+                    ->delete();
+            }
+
+            if (Schema::hasTable('activacion_nivel_hist_trs')) {
+                $counts['activacion_nivel_hist'] = DB::table('activacion_nivel_hist_trs')
+                    ->when(
+                        Schema::hasColumn('activacion_nivel_hist_trs', 'ac_ni_hi-tenant_id'),
+                        static fn ($q) => $q->where('ac_ni_hi-tenant_id', $tenantId),
+                    )
+                    ->whereIn('ac_ni_hi-ac_de_pl_id-fk', $activationIds)
+                    ->delete();
+            }
+
+            if (Schema::hasTable('cronologia_emergencia_trs')) {
+                $counts['cronologia_emergencia'] = DB::table('cronologia_emergencia_trs')
+                    ->when(
+                        Schema::hasColumn('cronologia_emergencia_trs', 'cr_em-tenant_id'),
+                        static fn ($q) => $q->where('cr_em-tenant_id', $tenantId),
+                    )
+                    ->whereIn('cr_em-ac_de_pl_id-fk', $activationIds)
+                    ->delete();
+            }
+
+            $counts['activaciones'] = DB::table('activacion_del_plan_trs')
+                ->when(
+                    Schema::hasColumn('activacion_del_plan_trs', 'ac_de_pl-tenant_id'),
+                    static fn ($q) => $q->where('ac_de_pl-tenant_id', $tenantId),
+                )
+                ->whereIn('ac_de_pl-id', $activationIds)
+                ->delete();
+
+            return $counts;
+        });
+
+        foreach ($activationIds as $activationId) {
+            $dir = 'activaciones/'.$tenantId.'/'.$activationId;
+            if (Storage::disk('local')->exists($dir)) {
+                Storage::disk('local')->deleteDirectory($dir);
+            }
+        }
+
+        $this->auditLogger->logFromRequest($request, [
+            'event_type' => 'activations_reset',
+            'module' => 'activation',
+            'new_value' => [
+                'states' => $states,
+                'activation_ids' => $activationIds->values()->all(),
+                'deleted' => $deleted,
+            ],
+        ]);
+
+        return response()->json([
+            'message' => 'OK',
+            'deleted' => $deleted,
+        ]);
+    }
+
     public function myActions(Request $request): JsonResponse
     {
         $tenantId = $this->tenantContext->tenantId();

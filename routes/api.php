@@ -14,6 +14,10 @@ use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function () {
     Route::post('auth/login', [AuthController::class, 'login']);
+    Route::post('auth/password/forgot', [AuthController::class, 'requestPasswordReset']);
+    Route::post('auth/password/reset', [AuthController::class, 'resetPassword']);
+    Route::post('auth/2fa/verify', [AuthController::class, 'verifyTwoFactor']);
+    Route::post('auth/2fa/resend', [AuthController::class, 'resendTwoFactor']);
     Route::get('tenant/{tenantId}/logo', [TenantSettingsController::class, 'publicLogo']);
 
     Route::middleware(['auth:sanctum', 'restrictAuditor'])->group(function () {
@@ -25,6 +29,7 @@ Route::prefix('v1')->group(function () {
         Route::put('activacion/{activationId}/nivel', [ActivationController::class, 'changeLevel']);
         Route::post('activacion/{activationId}/notificaciones/enviar', [ActivationController::class, 'sendNotifications']);
         Route::post('activacion/{activationId}/notificaciones/fin', [ActivationController::class, 'sendEndNotifications']);
+        Route::post('activacion/reset', [ActivationController::class, 'resetActivations']);
         Route::get('acciones/mias', [ActivationController::class, 'myActions']);
         Route::post('acciones/confirmar', [ActivationController::class, 'confirmMyActions']);
         Route::post('activacion/{activationId}/documentos', [ActivationController::class, 'uploadDocuments']);

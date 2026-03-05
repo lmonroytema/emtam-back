@@ -33,6 +33,7 @@ class Tenant extends Model
         'notifications_message_simulacrum',
         'notifications_message_phase2',
         'notifications_include_credentials',
+        'two_factor_enabled',
     ];
 
     protected function casts(): array
@@ -43,6 +44,7 @@ class Tenant extends Model
             'test_notification_emails' => 'array',
             'test_notification_whatsapp_numbers' => 'array',
             'notifications_include_credentials' => 'boolean',
+            'two_factor_enabled' => 'boolean',
         ];
     }
 
