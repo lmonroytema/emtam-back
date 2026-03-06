@@ -142,6 +142,98 @@ class AuthController extends Controller
         ]);
     }
 
+    public function activationCodeLogin(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'activation_code' => ['required', 'string'],
+        ]);
+
+        $tenantId = $this->tenantContext->tenantId();
+        if ($tenantId === null) {
+            return response()->json(['message' => __('messages.tenant.missing')], 422);
+        }
+
+        $activationId = trim((string) $data['activation_code']);
+        if ($activationId === '') {
+            return response()->json(['message' => 'Invalid activation code.'], 422);
+        }
+
+        if (! Schema::hasTable('activacion_del_plan_trs')) {
+            return response()->json(['message' => 'Missing activacion_del_plan_trs table.'], 422);
+        }
+
+        $activationExists = DB::table('activacion_del_plan_trs')
+            ->when(
+                Schema::hasColumn('activacion_del_plan_trs', 'ac_de_pl-tenant_id'),
+                static fn ($q) => $q->where('ac_de_pl-tenant_id', $tenantId),
+            )
+            ->where('ac_de_pl-id', $activationId)
+            ->exists();
+
+        if (! $activationExists) {
+            return response()->json(['message' => 'Activation not found.'], 404);
+        }
+
+        if (! Schema::hasTable('control_panel_access_trs')) {
+            return response()->json(['message' => 'Missing control_panel_access_trs table.'], 422);
+        }
+
+        $safeTenant = preg_replace('/[^a-z0-9]+/', '-', strtolower($tenantId));
+        $safeTenant = trim((string) $safeTenant, '-') ?: 'tenant';
+        $email = 'activation-code@'.$safeTenant.'.emta.local';
+
+        $user = User::query()
+            ->where('tenant_id', $tenantId)
+            ->where('email', $email)
+            ->first();
+
+        if (! $user) {
+            $user = User::query()->create([
+                'name' => 'Código de activación',
+                'email' => $email,
+                'tenant_id' => $tenantId,
+                'password' => Hash::make(Str::uuid()->toString()),
+                'perfil' => 'recurso-visor',
+            ]);
+        }
+
+        $expiresAt = now()->addDay()->toDateTimeString();
+        DB::table('control_panel_access_trs')->updateOrInsert(
+            [
+                'tenant_id' => $tenantId,
+                'activation_id' => $activationId,
+                'user_id' => $user->id,
+            ],
+            [
+                'created_by_user_id' => null,
+                'expires_at' => $expiresAt,
+                'updated_at' => now()->toDateTimeString(),
+                'created_at' => now()->toDateTimeString(),
+            ],
+        );
+
+        $this->auditLogger->logForUser($user, $tenantId, $request->ip(), [
+            'event_type' => 'activation_code_login',
+            'module' => 'auth',
+            'entity_id' => (string) $user->id,
+            'entity_type' => 'User',
+        ]);
+
+        return response()->json([
+            'token' => $user->createToken('api')->plainTextToken,
+            'token_type' => 'Bearer',
+            'activation_id' => $activationId,
+            'user' => [
+                'id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'tenant_id' => $user->tenant_id,
+                'language' => $user->language,
+                'perfil' => $user->perfil,
+            ],
+        ]);
+    }
+
     public function requestPasswordReset(Request $request): JsonResponse
     {
         $data = $request->validate([
