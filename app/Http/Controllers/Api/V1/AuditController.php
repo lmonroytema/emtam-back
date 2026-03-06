@@ -24,7 +24,7 @@ class AuditController extends Controller
 
         $user = $request->user();
         $perfil = strtolower(trim((string) ($user?->perfil ?? '')));
-        if ($perfil !== 'auditor' && $perfil !== 'admin') {
+        if ($perfil !== 'auditor' && $perfil !== 'admin' && $perfil !== 'director') {
             return response()->json(['message' => 'Forbidden.'], 403);
         }
 
@@ -104,7 +104,7 @@ class AuditController extends Controller
 
         $user = $request->user();
         $perfil = strtolower(trim((string) ($user?->perfil ?? '')));
-        if ($perfil !== 'auditor' && $perfil !== 'admin') {
+        if ($perfil !== 'auditor' && $perfil !== 'admin' && $perfil !== 'director') {
             return response()->json(['message' => 'Forbidden.'], 403);
         }
 
@@ -161,7 +161,7 @@ class AuditController extends Controller
 
         $user = $request->user();
         $perfil = strtolower(trim((string) ($user?->perfil ?? '')));
-        if ($perfil !== 'auditor' && $perfil !== 'admin') {
+        if ($perfil !== 'auditor' && $perfil !== 'admin' && $perfil !== 'director') {
             return response()->json(['message' => 'Forbidden.'], 403);
         }
 

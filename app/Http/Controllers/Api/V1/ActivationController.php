@@ -736,6 +736,7 @@ class ActivationController extends Controller
         }
         $emailSubject = $subjectPrefix.'Acciones asignadas — '.$planName;
         $emailBody = ($notificationMessage !== '' ? $notificationMessage : '')."\n";
+        $escapeHtml = static fn ($value) => htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
         $buildActionsByTipo = static function (array $acciones): array {
             $accionesByTipo = [
                 'TITULAR' => [],
@@ -777,12 +778,26 @@ class ActivationController extends Controller
                     : ($hasTitular ? 'TITULAR' : ($hasSuplente ? 'SUPLENTE' : '—'));
 
                 $body = $emailBody;
+                $bodyHtml = '<div style="font-family: Arial, sans-serif; font-size: 14px; color: #111; line-height: 1.6;">'
+                    .'<div style="font-size: 16px; font-weight: 700; margin-bottom: 12px;">'.$escapeHtml($subject).'</div>'
+                    .($notificationMessage !== ''
+                        ? '<div style="margin-bottom: 12px;">'.nl2br($escapeHtml($notificationMessage)).'</div>'
+                        : '')
+                    .'<div style="margin: 12px 0; padding: 10px 12px; background: #f6f6f6; border: 1px solid #e5e5e5; border-radius: 8px;">'
+                    .'<div><strong>Plan:</strong> '.$escapeHtml($planName).'</div>'
+                    .'<div><strong>Activación:</strong> '.$escapeHtml($activationId).'</div>'
+                    .'<div><strong>Rol:</strong> '.$escapeHtml($rolesLabel).'</div>'
+                    .'</div>'
+                    .'<div style="font-size: 12px; color: #666;">'.$escapeHtml($modoLabel).'</div>'
+                    .'</div>';
 
                 if ($mode === 'file') {
                     $safeTarget = $to !== '' ? $to : (string) ($p['per_id'] ?? 'persona');
                     $safe = preg_replace('/[^A-Za-z0-9._-]+/', '_', $safeTarget) ?: 'persona';
                     $path = 'notifications_outbox/'.$tenantId.'/'.$activationId.'/'.$ts.'-'.$safe.'.txt';
                     Storage::disk('local')->put($path, $body);
+                    $htmlPath = 'notifications_outbox/'.$tenantId.'/'.$activationId.'/'.$ts.'-'.$safe.'.html';
+                    Storage::disk('local')->put($htmlPath, $bodyHtml);
                     $jsonPath = 'notifications_outbox/'.$tenantId.'/'.$activationId.'/'.$ts.'-'.$safe.'.json';
                     Storage::disk('local')->put($jsonPath, json_encode([
                         'activation_id' => $activationId,
@@ -803,7 +818,7 @@ class ActivationController extends Controller
                     $filesWritten++;
                 } else {
                     if ($to !== '') {
-                        Mail::raw($body, static function ($m) use ($to, $subject) {
+                        Mail::html($bodyHtml, static function ($m) use ($to, $subject) {
                             $m->to($to)->subject($subject);
                         });
                         $sent++;
@@ -840,11 +855,24 @@ class ActivationController extends Controller
             $subject = $emailSubject;
             foreach ($testEmails as $testEmail) {
                 $body = $emailBody;
+                $bodyHtml = '<div style="font-family: Arial, sans-serif; font-size: 14px; color: #111; line-height: 1.6;">'
+                    .'<div style="font-size: 16px; font-weight: 700; margin-bottom: 12px;">'.$escapeHtml($subject).'</div>'
+                    .($notificationMessage !== ''
+                        ? '<div style="margin-bottom: 12px;">'.nl2br($escapeHtml($notificationMessage)).'</div>'
+                        : '')
+                    .'<div style="margin: 12px 0; padding: 10px 12px; background: #f6f6f6; border: 1px solid #e5e5e5; border-radius: 8px;">'
+                    .'<div><strong>Plan:</strong> '.$escapeHtml($planName).'</div>'
+                    .'<div><strong>Activación:</strong> '.$escapeHtml($activationId).'</div>'
+                    .'</div>'
+                    .'<div style="font-size: 12px; color: #666;">'.$escapeHtml($modoLabel).'</div>'
+                    .'</div>';
 
                 if ($mode === 'file') {
                     $safe = preg_replace('/[^A-Za-z0-9._-]+/', '_', $testEmail) ?: 'test';
                     $path = 'notifications_outbox/'.$tenantId.'/'.$activationId.'/'.$ts.'-'.$safe.'.txt';
                     Storage::disk('local')->put($path, $body);
+                    $htmlPath = 'notifications_outbox/'.$tenantId.'/'.$activationId.'/'.$ts.'-'.$safe.'.html';
+                    Storage::disk('local')->put($htmlPath, $bodyHtml);
                     $jsonPath = 'notifications_outbox/'.$tenantId.'/'.$activationId.'/'.$ts.'-'.$safe.'.json';
                     Storage::disk('local')->put($jsonPath, json_encode([
                         'activation_id' => $activationId,
@@ -861,7 +889,7 @@ class ActivationController extends Controller
                     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
                     $filesWritten++;
                 } else {
-                    Mail::raw($body, static function ($m) use ($testEmail, $subject) {
+                    Mail::html($bodyHtml, static function ($m) use ($testEmail, $subject) {
                         $m->to($testEmail)->subject($subject);
                     });
                     $sent++;
@@ -1043,6 +1071,201 @@ class ActivationController extends Controller
             'whatsapp_recipients' => count($whatsappTargets),
             'email_subject' => $emailSubject,
             'email_body' => $emailBody,
+        ]);
+    }
+
+    public function sendNormalidadNotifications(Request $request): JsonResponse
+    {
+        $tenantId = $this->tenantContext->tenantId();
+
+        if ($tenantId === null) {
+            return response()->json(['message' => __('messages.tenant.missing')], 422);
+        }
+
+        $validated = $request->validate([
+            'ti_em_id' => ['required', 'string'],
+            'rie_id' => ['required', 'string'],
+        ]);
+
+        $tiEmId = trim((string) ($validated['ti_em_id'] ?? ''));
+        $rieId = trim((string) ($validated['rie_id'] ?? ''));
+
+        if ($tiEmId === '' || $rieId === '') {
+            return response()->json(['message' => 'Invalid request.'], 422);
+        }
+
+        $tenant = Tenant::query()->firstOrCreate(
+            ['tenant_id' => $tenantId],
+            ['name' => $tenantId, 'default_language' => 'es'],
+        );
+        $productionMode = (bool) ($tenant?->notifications_production_mode ?? false);
+        $modeLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
+        $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
+
+        $tipoLabel = $tiEmId;
+        if (Schema::hasTable('tipo_emergencia_cat')) {
+            $tipo = DB::table('tipo_emergencia_cat')
+                ->when(
+                    Schema::hasColumn('tipo_emergencia_cat', 'ti_em-tenant_id'),
+                    static fn ($q) => $q->where('ti_em-tenant_id', $tenantId),
+                )
+                ->where('ti_em-id', $tiEmId)
+                ->first();
+            if ($tipo) {
+                $cod = trim((string) ($tipo->{'ti_em-cod'} ?? ''));
+                $nombre = trim((string) ($tipo->{'ti_em-nombre'} ?? ''));
+                $tipoLabel = trim(implode(' — ', array_filter([$cod, $nombre]))) ?: $tiEmId;
+            }
+        }
+
+        $riesgoLabel = $rieId;
+        if (Schema::hasTable('riesgo_cat')) {
+            $riesgo = DB::table('riesgo_cat')
+                ->when(
+                    Schema::hasColumn('riesgo_cat', 'rie-tenant_id'),
+                    static fn ($q) => $q->where('rie-tenant_id', $tenantId),
+                )
+                ->where('rie-id', $rieId)
+                ->first();
+            if ($riesgo) {
+                $cod = trim((string) ($riesgo->{'rie-cod'} ?? ''));
+                $nombre = trim((string) ($riesgo->{'rie-nombre'} ?? ''));
+                $riesgoLabel = trim(implode(' — ', array_filter([$cod, $nombre]))) ?: $rieId;
+            }
+        }
+
+        $nivelLabel = 'Aviso';
+        if (Schema::hasTable('nivel_alerta_cat')) {
+            $nivel = DB::table('nivel_alerta_cat')
+                ->when(
+                    Schema::hasColumn('nivel_alerta_cat', 'ni_al-tenant_id'),
+                    static fn ($q) => $q->where('ni_al-tenant_id', $tenantId),
+                )
+                ->whereRaw("UPPER(COALESCE(`ni_al-nombre`, '')) LIKE '%AVISO%' OR UPPER(COALESCE(`ni_al-cod`, '')) IN ('AVISO','AV')")
+                ->orderByRaw("CASE WHEN UPPER(COALESCE(`ni_al-nombre`, '')) LIKE '%AVISO%' THEN 0 ELSE 1 END")
+                ->first();
+            if ($nivel) {
+                $cod = trim((string) ($nivel->{'ni_al-cod'} ?? ''));
+                $nombre = trim((string) ($nivel->{'ni_al-nombre'} ?? ''));
+                $nivelLabel = trim(implode(' — ', array_filter([$cod, $nombre]))) ?: 'Aviso';
+            }
+        }
+
+        $recipients = [];
+        if ($productionMode) {
+            if (Schema::hasTable('persona_rol_grupo_cfg') && Schema::hasTable('persona_mst')) {
+                $rows = DB::table('persona_rol_grupo_cfg as prg')
+                    ->join('persona_mst as p', 'p.per-id', '=', 'prg.pe_ro_gr-per_id-fk')
+                    ->when(
+                        Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-tenant_id'),
+                        static fn ($q) => $q->where('prg.pe_ro_gr-tenant_id', $tenantId),
+                    )
+                    ->when(
+                        Schema::hasColumn('persona_mst', 'per-tenant_id'),
+                        static fn ($q) => $q->where('p.per-tenant_id', $tenantId),
+                    )
+                    ->whereRaw("UPPER(COALESCE(`prg`.`pe_ro_gr-activo`, 'SI')) <> 'NO'")
+                    ->whereRaw("UPPER(COALESCE(`prg`.`pe_ro_gr-tipo_asignacion`, '')) = 'TITULAR'")
+                    ->when(
+                        Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-fech_fin'),
+                        static fn ($q) => $q->whereNull('prg.pe_ro_gr-fech_fin'),
+                    )
+                    ->get([
+                        'p.per-email as email',
+                        'p.per-nombre as nombre',
+                        'p.per-apellido_1 as apellido_1',
+                        'p.per-apellido_2 as apellido_2',
+                    ]);
+
+                foreach ($rows as $row) {
+                    $email = strtolower(trim((string) ($row->email ?? '')));
+                    if ($email === '') {
+                        continue;
+                    }
+                    $recipients[$email] = trim(implode(' ', array_filter([
+                        (string) ($row->nombre ?? ''),
+                        (string) ($row->apellido_1 ?? ''),
+                        (string) ($row->apellido_2 ?? ''),
+                    ])));
+                }
+            }
+        } else {
+            $raw = $tenant?->test_notification_emails;
+            if (! empty($raw)) {
+                if (is_string($raw)) {
+                    $parts = preg_split('/[;,]+/', $raw) ?: [];
+                    foreach ($parts as $p) {
+                        $email = strtolower(trim($p));
+                        if ($email !== '') {
+                            $recipients[$email] = $email;
+                        }
+                    }
+                } elseif (is_array($raw)) {
+                    foreach ($raw as $p) {
+                        $email = strtolower(trim((string) $p));
+                        if ($email !== '') {
+                            $recipients[$email] = $email;
+                        }
+                    }
+                }
+            }
+        }
+
+        $subject = $subjectPrefix.'Aviso — '.$tipoLabel;
+        $escapeHtml = static fn ($value) => htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
+        $bodyHtml = '<div style="font-family: Arial, sans-serif; font-size: 14px; color: #111; line-height: 1.6;">'
+            .'<div style="font-size: 16px; font-weight: 700; margin-bottom: 12px;">'.$escapeHtml($subject).'</div>'
+            .'<div style="margin-bottom: 12px;">Se informa que se mantiene la situación en <strong>Normalidad</strong>.</div>'
+            .'<div style="margin: 12px 0; padding: 10px 12px; background: #f6f6f6; border: 1px solid #e5e5e5; border-radius: 8px;">'
+            .'<div><strong>Tipo de emergencia:</strong> '.$escapeHtml($tipoLabel).'</div>'
+            .'<div><strong>Riesgo identificado:</strong> '.$escapeHtml($riesgoLabel).'</div>'
+            .'<div><strong>Criterio:</strong> Normalidad</div>'
+            .'<div><strong>Nivel de alerta:</strong> '.$escapeHtml($nivelLabel).'</div>'
+            .'<div><strong>Fecha/hora:</strong> '.$escapeHtml(now()->toDateTimeString()).'</div>'
+            .'</div>'
+            .'<div style="font-size: 12px; color: #666;">'.$escapeHtml($modeLabel).'</div>'
+            .'</div>';
+
+        $mode = app()->environment('local') ? 'file' : 'mail';
+        $sent = 0;
+        $filesWritten = 0;
+        $ts = now()->format('YmdHis');
+
+        if (empty($recipients)) {
+            return response()->json([
+                'message' => 'No recipients.',
+                'mode' => $mode,
+                'sent' => 0,
+                'files_written' => 0,
+                'recipients' => 0,
+                'email_subject' => $subject,
+                'email_body' => strip_tags($bodyHtml),
+            ]);
+        }
+
+        foreach ($recipients as $email => $displayName) {
+            if ($mode === 'file') {
+                $safe = preg_replace('/[^A-Za-z0-9._-]+/', '_', $email) ?: 'persona';
+                $path = 'notifications_outbox/'.$tenantId.'/normalidad/'.$ts.'-'.$safe.'.html';
+                Storage::disk('local')->put($path, $bodyHtml);
+                $filesWritten++;
+                continue;
+            }
+
+            Mail::html($bodyHtml, static function ($m) use ($email, $subject) {
+                $m->to($email)->subject($subject);
+            });
+            $sent++;
+        }
+
+        return response()->json([
+            'message' => 'OK',
+            'mode' => $mode,
+            'sent' => $sent,
+            'files_written' => $filesWritten,
+            'recipients' => count($recipients),
+            'email_subject' => $subject,
+            'email_body' => strip_tags($bodyHtml),
         ]);
     }
 

@@ -29,6 +29,7 @@ Route::prefix('v1')->group(function () {
         Route::put('activacion/{activationId}/nivel', [ActivationController::class, 'changeLevel']);
         Route::post('activacion/{activationId}/notificaciones/enviar', [ActivationController::class, 'sendNotifications']);
         Route::post('activacion/{activationId}/notificaciones/fin', [ActivationController::class, 'sendEndNotifications']);
+        Route::post('activacion/normalidad/notificaciones', [ActivationController::class, 'sendNormalidadNotifications']);
         Route::post('activacion/reset', [ActivationController::class, 'resetActivations']);
         Route::get('acciones/mias', [ActivationController::class, 'myActions']);
         Route::post('acciones/confirmar', [ActivationController::class, 'confirmMyActions']);
