@@ -142,7 +142,7 @@ class AuthController extends Controller
         ]);
     }
 
-    public function activationCodeLogin(Request $request): JsonResponse
+    public function activationCodeValidate(Request $request): JsonResponse
     {
         $data = $request->validate([
             'activation_code' => ['required', 'string'],
@@ -153,83 +153,142 @@ class AuthController extends Controller
             return response()->json(['message' => __('messages.tenant.missing')], 422);
         }
 
-        $activationId = trim((string) $data['activation_code']);
-        if ($activationId === '') {
-            return response()->json(['message' => 'Invalid activation code.'], 422);
+        $code = trim((string) $data['activation_code']);
+        $tenant = Tenant::query()->where('tenant_id', $tenantId)->first();
+        $valid = $tenant
+            && (bool) ($tenant->director_activation_code_enabled ?? false)
+            && (string) ($tenant->director_activation_code_hash ?? '') !== ''
+            && $code !== ''
+            && Hash::check($code, (string) $tenant->director_activation_code_hash);
+
+        if (! $valid) {
+            return response()->json(['message' => __('messages.auth.invalid_credentials')], 422);
         }
 
-        if (! Schema::hasTable('activacion_del_plan_trs')) {
-            return response()->json(['message' => 'Missing activacion_del_plan_trs table.'], 422);
+        return response()->json(['message' => 'OK']);
+    }
+
+    public function activationCodeActivate(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'activation_code' => ['required', 'string'],
+            'email' => ['required', 'email'],
+            'password' => ['required', 'string'],
+        ]);
+
+        $tenantId = $this->tenantContext->tenantId();
+        if ($tenantId === null) {
+            return response()->json(['message' => __('messages.tenant.missing')], 422);
         }
 
-        $activationExists = DB::table('activacion_del_plan_trs')
-            ->when(
-                Schema::hasColumn('activacion_del_plan_trs', 'ac_de_pl-tenant_id'),
-                static fn ($q) => $q->where('ac_de_pl-tenant_id', $tenantId),
-            )
-            ->where('ac_de_pl-id', $activationId)
-            ->exists();
+        $code = trim((string) $data['activation_code']);
+        $email = strtolower(trim((string) $data['email']));
+        $password = (string) $data['password'];
 
-        if (! $activationExists) {
-            return response()->json(['message' => 'Activation not found.'], 404);
-        }
+        $tenant = Tenant::query()->where('tenant_id', $tenantId)->first();
+        $codeEnabled = (bool) ($tenant?->director_activation_code_enabled ?? false);
+        $codeHash = (string) ($tenant?->director_activation_code_hash ?? '');
+        $codeOk = $codeEnabled && $codeHash !== '' && $code !== '' && Hash::check($code, $codeHash);
 
-        if (! Schema::hasTable('control_panel_access_trs')) {
-            return response()->json(['message' => 'Missing control_panel_access_trs table.'], 422);
-        }
+        $user = User::query()->where('email', $email)->first();
+        $tenantMatch = $user && ($user->tenant_id === null || $user->tenant_id === $tenantId);
+        $passwordOk = $user && Hash::check($password, $user->password);
 
-        $safeTenant = preg_replace('/[^a-z0-9]+/', '-', strtolower($tenantId));
-        $safeTenant = trim((string) $safeTenant, '-') ?: 'tenant';
-        $email = 'activation-code@'.$safeTenant.'.emta.local';
-
-        $user = User::query()
-            ->where('tenant_id', $tenantId)
-            ->where('email', $email)
-            ->first();
-
-        if (! $user) {
-            $user = User::query()->create([
-                'name' => 'Código de activación',
-                'email' => $email,
+        if (! $codeOk || ! $user || ! $tenantMatch || ! $passwordOk) {
+            $reason = ! $codeOk
+                ? ($codeEnabled ? 'codigo_invalido' : 'codigo_desactivado')
+                : (! $user ? 'usuario_no_encontrado' : (! $tenantMatch ? 'tenant_no_coincide' : 'password_invalida'));
+            $this->auditLogger->log([
                 'tenant_id' => $tenantId,
-                'password' => Hash::make(Str::uuid()->toString()),
-                'perfil' => 'recurso-visor',
+                'user_id' => $user?->id,
+                'event_type' => 'ACTIVACION_PERFIL_DIRECTOR',
+                'module' => 'auth',
+                'entity_id' => $user?->id,
+                'entity_type' => 'User',
+                'new_value' => [
+                    'resultado' => 'FALLIDO',
+                    'motivo_fallo' => $reason,
+                ],
+                'ip_origin' => $request->ip(),
             ]);
+            return response()->json(['message' => __('messages.auth.invalid_credentials')], 422);
         }
 
-        $expiresAt = now()->addDay()->toDateTimeString();
-        DB::table('control_panel_access_trs')->updateOrInsert(
-            [
-                'tenant_id' => $tenantId,
-                'activation_id' => $activationId,
-                'user_id' => $user->id,
-            ],
-            [
-                'created_by_user_id' => null,
-                'expires_at' => $expiresAt,
-                'updated_at' => now()->toDateTimeString(),
-                'created_at' => now()->toDateTimeString(),
-            ],
-        );
+        $previousPerfil = $user->perfil;
+        if (strtolower(trim((string) $user->perfil)) !== 'director') {
+            $user->perfil = 'director';
+            $user->save();
+        }
 
         $this->auditLogger->logForUser($user, $tenantId, $request->ip(), [
-            'event_type' => 'activation_code_login',
+            'event_type' => 'ACTIVACION_PERFIL_DIRECTOR',
             'module' => 'auth',
             'entity_id' => (string) $user->id,
             'entity_type' => 'User',
+            'previous_value' => [
+                'perfil_anterior' => $previousPerfil,
+            ],
+            'new_value' => [
+                'perfil_nuevo' => 'director',
+                'resultado' => 'EXITOSO',
+            ],
         ]);
 
+        $twoFactorEnabled = (bool) ($tenant?->two_factor_enabled ?? false);
+        $perfil = strtolower(trim((string) ($user->perfil ?? '')));
+        if ($perfil === 'admin' || ! $twoFactorEnabled) {
+            return response()->json([
+                'token' => $user->createToken('api')->plainTextToken,
+                'token_type' => 'Bearer',
+                'user' => [
+                    'id' => $user->id,
+                    'name' => $user->name,
+                    'email' => $user->email,
+                    'tenant_id' => $user->tenant_id,
+                    'language' => $user->language,
+                    'perfil' => $user->perfil,
+                ],
+            ]);
+        }
+
+        if (! Schema::hasTable('login_two_factor_tokens')) {
+            return response()->json(['message' => 'Missing login_two_factor_tokens table.'], 422);
+        }
+
+        $challengeId = (string) Str::uuid();
+        $code = (string) random_int(100000, 999999);
+        $expiresAt = now()->addMinutes(10);
+
+        DB::table('login_two_factor_tokens')
+            ->where('user_id', $user->id)
+            ->delete();
+
+        DB::table('login_two_factor_tokens')->insert([
+            'id' => $challengeId,
+            'user_id' => $user->id,
+            'tenant_id' => $tenantId,
+            'token_hash' => Hash::make($code),
+            'attempts' => 0,
+            'expires_at' => $expiresAt,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $delivery = $this->sendTwoFactorCode($user, $tenantId, $code, $challengeId);
+
+        if (! $delivery['sent']) {
+            DB::table('login_two_factor_tokens')->where('id', $challengeId)->delete();
+            return response()->json(['message' => $delivery['message']], 422);
+        }
+
         return response()->json([
-            'token' => $user->createToken('api')->plainTextToken,
-            'token_type' => 'Bearer',
-            'activation_id' => $activationId,
-            'user' => [
-                'id' => $user->id,
-                'name' => $user->name,
-                'email' => $user->email,
-                'tenant_id' => $user->tenant_id,
-                'language' => $user->language,
-                'perfil' => $user->perfil,
+            'two_factor_required' => true,
+            'challenge_id' => $challengeId,
+            'expires_in' => 600,
+            'delivery' => [
+                'channel' => 'email',
+                'mode' => $delivery['mode'],
+                'destination' => $delivery['destination'],
             ],
         ]);
     }

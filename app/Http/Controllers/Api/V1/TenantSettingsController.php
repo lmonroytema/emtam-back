@@ -10,6 +10,7 @@ use App\Services\TenantContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
@@ -59,6 +60,8 @@ class TenantSettingsController extends Controller
                 'notifications_message_phase2' => $tenant->notifications_message_phase2,
                 'notifications_include_credentials' => (bool) ($tenant->notifications_include_credentials ?? false),
                 'two_factor_enabled' => (bool) ($tenant->two_factor_enabled ?? false),
+                'director_activation_code_enabled' => (bool) ($tenant->director_activation_code_enabled ?? false),
+                'director_activation_code_configured' => (bool) ($tenant->director_activation_code_hash ?? null),
                 'logo_path' => $tenant->logo_path,
                 'logo_url' => $logoUrl,
                 'gps_min_lat' => $tenant->gps_min_lat,
@@ -141,6 +144,26 @@ class TenantSettingsController extends Controller
             $messagePhase2 = is_string($value) ? trim($value) : null;
         }
 
+        $activationCodeEnabled = array_key_exists('director_activation_code_enabled', $data)
+            ? (bool) $data['director_activation_code_enabled']
+            : (bool) ($tenant->director_activation_code_enabled ?? false);
+        $activationCodeHash = $tenant->director_activation_code_hash;
+        $activationCodeRaw = null;
+        if (array_key_exists('director_activation_code', $data)) {
+            $activationCodeRaw = trim((string) $data['director_activation_code']);
+            if ($activationCodeRaw !== '') {
+                $activationCodeHash = Hash::make($activationCodeRaw);
+                if (! array_key_exists('director_activation_code_enabled', $data)) {
+                    $activationCodeEnabled = true;
+                }
+            } else {
+                $activationCodeHash = null;
+            }
+        }
+        if (! $activationCodeEnabled) {
+            $activationCodeHash = null;
+        }
+
         $tenant->forceFill([
             'name' => array_key_exists('name', $data) ? (string) $data['name'] : $tenant->name,
             'address' => $data['address'] ?? $tenant->address,
@@ -167,6 +190,8 @@ class TenantSettingsController extends Controller
             'two_factor_enabled' => array_key_exists('two_factor_enabled', $data)
                 ? (bool) $data['two_factor_enabled']
                 : (bool) ($tenant->two_factor_enabled ?? false),
+            'director_activation_code_enabled' => $activationCodeEnabled,
+            'director_activation_code_hash' => $activationCodeHash,
             'gps_min_lat' => $data['gps_min_lat'] ?? $tenant->gps_min_lat,
             'gps_max_lat' => $data['gps_max_lat'] ?? $tenant->gps_max_lat,
             'gps_max_lat' => $data['gps_max_lat'] ?? $tenant->gps_max_lat,
@@ -238,6 +263,8 @@ class TenantSettingsController extends Controller
                 'notifications_message_phase2' => $tenant->notifications_message_phase2,
                 'notifications_include_credentials' => (bool) ($tenant->notifications_include_credentials ?? false),
                 'two_factor_enabled' => (bool) ($tenant->two_factor_enabled ?? false),
+                'director_activation_code_enabled' => (bool) ($tenant->director_activation_code_enabled ?? false),
+                'director_activation_code_configured' => (bool) ($tenant->director_activation_code_hash ?? null),
                 'logo_path' => $tenant->logo_path,
                 'logo_url' => $logoUrl,
                 'gps_min_lat' => $tenant->gps_min_lat,

@@ -34,6 +34,8 @@ class Tenant extends Model
         'notifications_message_phase2',
         'notifications_include_credentials',
         'two_factor_enabled',
+        'director_activation_code_hash',
+        'director_activation_code_enabled',
     ];
 
     protected function casts(): array
@@ -45,6 +47,7 @@ class Tenant extends Model
             'test_notification_whatsapp_numbers' => 'array',
             'notifications_include_credentials' => 'boolean',
             'two_factor_enabled' => 'boolean',
+            'director_activation_code_enabled' => 'boolean',
         ];
     }
 

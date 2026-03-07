@@ -14,7 +14,8 @@ use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function () {
     Route::post('auth/login', [AuthController::class, 'login']);
-    Route::post('auth/activation-code', [AuthController::class, 'activationCodeLogin']);
+    Route::post('auth/activation-code/validate', [AuthController::class, 'activationCodeValidate']);
+    Route::post('auth/activation-code/activate', [AuthController::class, 'activationCodeActivate']);
     Route::post('auth/password/forgot', [AuthController::class, 'requestPasswordReset']);
     Route::post('auth/password/reset', [AuthController::class, 'resetPassword']);
     Route::post('auth/2fa/verify', [AuthController::class, 'verifyTwoFactor']);

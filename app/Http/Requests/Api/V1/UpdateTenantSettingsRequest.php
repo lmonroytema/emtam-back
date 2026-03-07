@@ -26,6 +26,8 @@ class UpdateTenantSettingsRequest extends FormRequest
             'notifications_message_phase2' => ['sometimes', 'nullable', 'string'],
             'notifications_include_credentials' => ['sometimes', 'boolean'],
             'two_factor_enabled' => ['sometimes', 'boolean'],
+            'director_activation_code_enabled' => ['sometimes', 'boolean'],
+            'director_activation_code' => ['sometimes', 'nullable', 'string', 'min:4', 'max:64'],
             'gps_min_lat' => ['sometimes', 'nullable', 'numeric', 'between:-90,90'],
             'gps_max_lat' => ['sometimes', 'nullable', 'numeric', 'between:-90,90'],
             'gps_min_lng' => ['sometimes', 'nullable', 'numeric', 'between:-180,180'],
