@@ -342,10 +342,35 @@ class AuthController extends Controller
         ], static fn ($value) => $value !== null && $value !== ''));
         $resetUrl = $frontendUrl.'/reset-password?'.$query;
 
+        $tenant = $tenantId ? Tenant::query()->where('tenant_id', $tenantId)->first() : null;
+        $productionMode = (bool) ($tenant?->notifications_production_mode ?? false);
+        $recipients = [];
+        if ($productionMode) {
+            $recipients = [$email];
+        } else {
+            $raw = $tenant?->test_notification_emails;
+            $rawArr = is_array($raw) ? $raw : [];
+            $emails = [];
+            foreach ($rawArr as $e) {
+                $e = strtolower(trim((string) $e));
+                if ($e !== '') {
+                    $emails[] = $e;
+                }
+            }
+            $recipients = array_values(array_unique($emails));
+        }
+
         try {
-            Mail::raw(__('messages.auth.password_reset_email', ['url' => $resetUrl]), function ($message) use ($email) {
-                $message->to($email)->subject(__('messages.auth.password_reset_subject'));
-            });
+            if (! empty($recipients)) {
+                $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
+                $subject = $subjectPrefix.__('messages.auth.password_reset_subject');
+                $body = __('messages.auth.password_reset_email', ['url' => $resetUrl]);
+                foreach ($recipients as $to) {
+                    Mail::raw($body, static function ($message) use ($to, $subject) {
+                        $message->to($to)->subject($subject);
+                    });
+                }
+            }
         } catch (\Throwable) {
         }
 
