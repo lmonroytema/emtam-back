@@ -1907,6 +1907,59 @@ class ActivationController extends Controller
         ]);
     }
 
+    public function logAutoDelegation(Request $request, string $activationId): JsonResponse
+    {
+        $tenantId = $this->tenantContext->tenantId();
+        if ($tenantId === null) {
+            return response()->json(['message' => __('messages.tenant.missing')], 422);
+        }
+
+        $validated = $request->validate([
+            'accion_detalle_id' => ['required', 'string'],
+            'grupo_id' => ['required', 'string'],
+            'titular_prev_per_id' => ['nullable', 'string'],
+            'suplente_new_per_id' => ['required', 'string'],
+            'asignacion_id' => ['nullable', 'string'],
+            'asignacion_prev_id' => ['nullable', 'string'],
+            'motivo' => ['nullable', 'string'],
+        ]);
+
+        $accionDetalleId = trim((string) ($validated['accion_detalle_id'] ?? ''));
+        $grupoId = trim((string) ($validated['grupo_id'] ?? ''));
+        $titularPrev = trim((string) ($validated['titular_prev_per_id'] ?? ''));
+        $suplenteNew = trim((string) ($validated['suplente_new_per_id'] ?? ''));
+        $asignacionId = trim((string) ($validated['asignacion_id'] ?? ''));
+        $asignacionPrevId = trim((string) ($validated['asignacion_prev_id'] ?? ''));
+        $motivo = trim((string) ($validated['motivo'] ?? ''));
+
+        if ($accionDetalleId === '' || $grupoId === '' || $suplenteNew === '') {
+            return response()->json(['message' => 'Invalid payload.'], 422);
+        }
+
+        $this->auditLogger->logFromRequest($request, [
+            'event_type' => 'delegation_auto',
+            'module' => 'delegations',
+            'plan_id' => $activationId,
+            'entity_id' => $asignacionId !== '' ? $asignacionId : null,
+            'entity_type' => 'asignacion_en_funciones_trs',
+            'previous_value' => [
+                'accion_detalle_id' => $accionDetalleId,
+                'grupo_id' => $grupoId,
+                'titular_prev_per_id' => $titularPrev !== '' ? $titularPrev : null,
+                'asignacion_prev_id' => $asignacionPrevId !== '' ? $asignacionPrevId : null,
+            ],
+            'new_value' => [
+                'suplente_new_per_id' => $suplenteNew,
+                'asignacion_id' => $asignacionId !== '' ? $asignacionId : null,
+                'tipo_delegacion' => 'AUTO',
+                'motivo' => $motivo !== '' ? $motivo : 'Vencimiento tiempo conformación',
+            ],
+            'justification' => 'Autodelegación por vencimiento de tiempo de conformación',
+        ]);
+
+        return response()->json(['message' => 'OK']);
+    }
+
     public function preview(Request $request): JsonResponse
     {
         $tenantId = $this->tenantContext->tenantId();

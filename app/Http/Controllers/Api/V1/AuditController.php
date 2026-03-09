@@ -119,7 +119,7 @@ class AuditController extends Controller
         }
 
         $rows = $query
-            ->whereIn('event_type', ['action_status_changed', 'action_created', 'delegation_created', 'delegation_updated'])
+            ->whereIn('event_type', ['action_status_changed', 'action_created', 'delegation_created', 'delegation_updated', 'delegation_auto'])
             ->select(['user_id', 'event_type'])
             ->get();
 
@@ -142,7 +142,7 @@ class AuditController extends Controller
                 $summary[$uid]['actions_updated']++;
             } elseif ($row->event_type === 'delegation_created') {
                 $summary[$uid]['delegations_created']++;
-            } elseif ($row->event_type === 'delegation_updated') {
+            } elseif ($row->event_type === 'delegation_updated' || $row->event_type === 'delegation_auto') {
                 $summary[$uid]['delegations_updated']++;
             }
         }
