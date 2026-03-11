@@ -82,10 +82,13 @@ class ActivationController extends Controller
             $niAlNombre = strtoupper(trim((string) ($niAl?->{'ni_al-nombre'} ?? '')));
             $niEmActivaPlan = strtoupper(trim((string) ($niEm?->{'ni_em-activa_plan'} ?? 'NO')));
 
+            $isAviso = $niAlCod !== '' && (str_contains($niAlNombre, 'AVISO') || $niAlCod === 'AVISO' || $niAlCod === 'AV' || str_starts_with($niAlCod, 'AV'));
             $isPrealerta = str_starts_with($niAlCod, 'P') || str_contains($niAlNombre, 'PREALERTA');
 
             $scenario = 'NORMALIDAD';
-            if ($isPrealerta) {
+            if ($isAviso) {
+                $scenario = 'AVISO';
+            } elseif ($isPrealerta) {
                 $scenario = 'PREALERTA';
             } elseif ($niEmActivaPlan === 'SI') {
                 $scenario = 'ACTIVACION';
@@ -189,25 +192,14 @@ class ActivationController extends Controller
                 }
             }
 
-            if ($scenario === 'PREALERTA' && Schema::hasTable('accion_set_cfg')) {
-                $pre = DB::table('accion_set_cfg')
-                    ->whereIn('ac_se-cod', ['AS01', 'AS04'])
-                    ->whereRaw("UPPER(COALESCE(`ac_se-activo`, 'SI')) <> 'NO'")
-                    ->when(
-                        Schema::hasColumn('accion_set_cfg', 'ac_se-tenant_id'),
-                        static fn ($q) => $q->where('ac_se-tenant_id', $tenantId),
-                    )
-                    ->pluck('ac_se-id')
-                    ->all();
-
-                if (! empty($pre)) {
-                    $actionSetIds = array_values(array_unique(array_map('strval', $pre)));
-                }
-            } elseif ($scenario !== 'PREALERTA' && ! empty($actionSetIds)) {
+            if ($scenario !== 'PREALERTA' && ! empty($actionSetIds)) {
                 $actionSetIds = [array_values($actionSetIds)[0]];
             }
 
             $actionSetIds = array_values(array_unique(array_filter($actionSetIds, static fn ($v) => is_string($v) && trim($v) !== '')));
+            if ($scenario === 'AVISO') {
+                $actionSetIds = [];
+            }
 
             if (Schema::hasTable('activacion_nivel_hist_trs')) {
                 DB::table('activacion_nivel_hist_trs')->insert([
@@ -270,7 +262,7 @@ class ActivationController extends Controller
                 }
             }
 
-            $shouldHydrate = $scenario !== 'NORMALIDAD' && ! empty($actionSetIds);
+            $shouldHydrate = in_array($scenario, ['ACTIVACION', 'PREALERTA'], true) && ! empty($actionSetIds);
             if (! $shouldHydrate) {
                 return response()->json([
                     'activation_id' => $activationId,
@@ -1269,6 +1261,221 @@ class ActivationController extends Controller
         ]);
     }
 
+    public function sendSummaryNotifications(Request $request, string $activationId): JsonResponse
+    {
+        $tenantId = $this->tenantContext->tenantId();
+
+        if ($tenantId === null) {
+            return response()->json(['message' => __('messages.tenant.missing')], 422);
+        }
+
+        $activationId = trim($activationId);
+        if ($activationId === '') {
+            return response()->json(['message' => 'Invalid activation id.'], 422);
+        }
+
+        if (! Schema::hasTable('activacion_control')) {
+            return response()->json(['message' => 'Missing activation table.'], 422);
+        }
+
+        $activation = DB::table('activacion_control')
+            ->when(
+                Schema::hasColumn('activacion_control', 'ac_de_pl-tenant_id'),
+                static fn ($q) => $q->where('ac_de_pl-tenant_id', $tenantId),
+            )
+            ->where('ac_de_pl-id', $activationId)
+            ->first();
+
+        if (! $activation) {
+            return response()->json(['message' => 'Activation not found.'], 404);
+        }
+
+        $tiEmId = trim((string) ($activation->{'ac_de_pl-ti_em_id-fk'} ?? ''));
+        $rieId = trim((string) ($activation->{'ac_de_pl-rie_id-fk'} ?? ''));
+        $nivelId = trim((string) ($activation->{'ac_de_pl-ni_al_id-fk'} ?? ''));
+        $isSimulacro = strtoupper(trim((string) ($activation->{'ac_de_pl-es_simul'} ?? 'NO'))) === 'SI';
+
+        $tenant = Tenant::query()->firstOrCreate(
+            ['tenant_id' => $tenantId],
+            ['name' => $tenantId, 'default_language' => 'es'],
+        );
+        $productionMode = (bool) ($tenant?->notifications_production_mode ?? false);
+        $modeLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
+        $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
+        $simPrefix = $isSimulacro ? '[SIMULACRO] ' : '';
+
+        $tipoLabel = $tiEmId;
+        if ($tiEmId !== '' && Schema::hasTable('tipo_emergencia_cat')) {
+            $tipo = DB::table('tipo_emergencia_cat')
+                ->when(
+                    Schema::hasColumn('tipo_emergencia_cat', 'ti_em-tenant_id'),
+                    static fn ($q) => $q->where('ti_em-tenant_id', $tenantId),
+                )
+                ->where('ti_em-id', $tiEmId)
+                ->first();
+            if ($tipo) {
+                $cod = trim((string) ($tipo->{'ti_em-cod'} ?? ''));
+                $nombre = trim((string) ($tipo->{'ti_em-nombre'} ?? ''));
+                $tipoLabel = trim(implode(' — ', array_filter([$cod, $nombre]))) ?: $tiEmId;
+            }
+        }
+
+        $riesgoLabel = $rieId;
+        if ($rieId !== '' && Schema::hasTable('riesgo_cat')) {
+            $riesgo = DB::table('riesgo_cat')
+                ->when(
+                    Schema::hasColumn('riesgo_cat', 'rie-tenant_id'),
+                    static fn ($q) => $q->where('rie-tenant_id', $tenantId),
+                )
+                ->where('rie-id', $rieId)
+                ->first();
+            if ($riesgo) {
+                $cod = trim((string) ($riesgo->{'rie-cod'} ?? ''));
+                $nombre = trim((string) ($riesgo->{'rie-nombre'} ?? ''));
+                $riesgoLabel = trim(implode(' — ', array_filter([$cod, $nombre]))) ?: $rieId;
+            }
+        }
+
+        $nivelLabel = $nivelId;
+        $nivelCod = '';
+        if ($nivelId !== '' && Schema::hasTable('nivel_alerta_cat')) {
+            $nivel = DB::table('nivel_alerta_cat')
+                ->when(
+                    Schema::hasColumn('nivel_alerta_cat', 'ni_al-tenant_id'),
+                    static fn ($q) => $q->where('ni_al-tenant_id', $tenantId),
+                )
+                ->where('ni_al-id', $nivelId)
+                ->first();
+            if ($nivel) {
+                $nivelCod = strtoupper(trim((string) ($nivel->{'ni_al-cod'} ?? '')));
+                $nombre = trim((string) ($nivel->{'ni_al-nombre'} ?? ''));
+                $nivelLabel = trim(implode(' — ', array_filter([$nivelCod, $nombre]))) ?: $nivelId;
+            }
+        }
+
+        $nivelUpper = strtoupper((string) $nivelLabel);
+        $isAviso = $nivelUpper !== '' && (str_contains($nivelUpper, 'AVISO') || $nivelCod === 'AVISO' || $nivelCod === 'AV' || str_starts_with($nivelCod, 'AV'));
+        $isPrealerta = $nivelUpper !== '' && (str_contains($nivelUpper, 'PREALERTA') || str_starts_with($nivelCod, 'P'));
+        $scenarioLabel = $isPrealerta ? 'Prealerta' : ($isAviso ? 'Aviso' : 'Resumen');
+
+        $recipients = [];
+        if ($productionMode) {
+            if (Schema::hasTable('persona_rol_grupo_cfg') && Schema::hasTable('persona_mst')) {
+                $rows = DB::table('persona_rol_grupo_cfg as prg')
+                    ->join('persona_mst as p', 'p.per-id', '=', 'prg.pe_ro_gr-per_id-fk')
+                    ->when(
+                        Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-tenant_id'),
+                        static fn ($q) => $q->where('prg.pe_ro_gr-tenant_id', $tenantId),
+                    )
+                    ->when(
+                        Schema::hasColumn('persona_mst', 'per-tenant_id'),
+                        static fn ($q) => $q->where('p.per-tenant_id', $tenantId),
+                    )
+                    ->whereRaw("UPPER(COALESCE(`prg`.`pe_ro_gr-activo`, 'SI')) <> 'NO'")
+                    ->whereRaw("UPPER(COALESCE(`prg`.`pe_ro_gr-tipo_asignacion`, 'SUPLENTE')) IN ('TITULAR','SUPLENTE')")
+                    ->when(
+                        Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-fech_fin'),
+                        static fn ($q) => $q->whereNull('prg.pe_ro_gr-fech_fin'),
+                    )
+                    ->get([
+                        'p.per-email as email',
+                        'p.per-nombre as nombre',
+                        'p.per-apellido_1 as apellido_1',
+                        'p.per-apellido_2 as apellido_2',
+                    ]);
+
+                foreach ($rows as $row) {
+                    $email = strtolower(trim((string) ($row->email ?? '')));
+                    if ($email === '') {
+                        continue;
+                    }
+                    $recipients[$email] = trim(implode(' ', array_filter([
+                        (string) ($row->nombre ?? ''),
+                        (string) ($row->apellido_1 ?? ''),
+                        (string) ($row->apellido_2 ?? ''),
+                    ])));
+                }
+            }
+        } else {
+            $raw = $tenant?->test_notification_emails;
+            if (! empty($raw)) {
+                if (is_string($raw)) {
+                    $parts = preg_split('/[;,]+/', $raw) ?: [];
+                    foreach ($parts as $p) {
+                        $email = strtolower(trim($p));
+                        if ($email !== '') {
+                            $recipients[$email] = $email;
+                        }
+                    }
+                } elseif (is_array($raw)) {
+                    foreach ($raw as $p) {
+                        $email = strtolower(trim((string) $p));
+                        if ($email !== '') {
+                            $recipients[$email] = $email;
+                        }
+                    }
+                }
+            }
+        }
+
+        $subject = $subjectPrefix.$simPrefix.'Resumen '.$scenarioLabel.($tipoLabel ? ' — '.$tipoLabel : '');
+        $escapeHtml = static fn ($value) => htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
+        $bodyHtml = '<div style="font-family: Arial, sans-serif; font-size: 14px; color: #111; line-height: 1.6;">'
+            .'<div style="font-size: 16px; font-weight: 700; margin-bottom: 12px;">'.$escapeHtml($subject).'</div>'
+            .'<div style="margin-bottom: 12px;">Se informa el nivel de <strong>'.$escapeHtml($scenarioLabel).'</strong>.</div>'
+            .'<div style="margin: 12px 0; padding: 10px 12px; background: #f6f6f6; border: 1px solid #e5e5e5; border-radius: 8px;">'
+            .($tipoLabel ? '<div><strong>Tipo de emergencia:</strong> '.$escapeHtml($tipoLabel).'</div>' : '')
+            .($riesgoLabel ? '<div><strong>Riesgo identificado:</strong> '.$escapeHtml($riesgoLabel).'</div>' : '')
+            .($nivelLabel ? '<div><strong>Nivel de alerta:</strong> '.$escapeHtml($nivelLabel).'</div>' : '')
+            .'<div><strong>Fecha/hora:</strong> '.$escapeHtml(now()->toDateTimeString()).'</div>'
+            .'</div>'
+            .'<div>En este nivel no se generan acciones operativas.</div>'
+            .'<div style="font-size: 12px; color: #666; margin-top: 10px;">'.$escapeHtml($modeLabel).'</div>'
+            .'</div>';
+
+        $mode = app()->environment('local') ? 'file' : 'mail';
+        $sent = 0;
+        $filesWritten = 0;
+        $ts = now()->format('YmdHis');
+
+        if (empty($recipients)) {
+            return response()->json([
+                'message' => 'No recipients.',
+                'mode' => $mode,
+                'sent' => 0,
+                'files_written' => 0,
+                'recipients' => 0,
+                'email_subject' => $subject,
+                'email_body' => strip_tags($bodyHtml),
+            ]);
+        }
+
+        foreach ($recipients as $email => $displayName) {
+            if ($mode === 'file') {
+                $safe = preg_replace('/[^A-Za-z0-9._-]+/', '_', $email) ?: 'persona';
+                $path = 'notifications_outbox/'.$tenantId.'/summary/'.$activationId.'/'.$ts.'-'.$safe.'.html';
+                Storage::disk('local')->put($path, $bodyHtml);
+                $filesWritten++;
+                continue;
+            }
+
+            Mail::html($bodyHtml, static function ($m) use ($email, $subject) {
+                $m->to($email)->subject($subject);
+            });
+            $sent++;
+        }
+
+        return response()->json([
+            'message' => 'OK',
+            'mode' => $mode,
+            'sent' => $sent,
+            'files_written' => $filesWritten,
+            'recipients' => count($recipients),
+            'email_subject' => $subject,
+            'email_body' => strip_tags($bodyHtml),
+        ]);
+    }
+
     private function postWhatsappWebhook(string $webhookUrl, array $payload): HttpClientResponse|\GuzzleHttp\Promise\PromiseInterface
     {
         return Http::timeout(8)->post($webhookUrl, $payload);
@@ -2062,9 +2269,12 @@ class ActivationController extends Controller
         $niAlNombre = strtoupper(trim((string) ($niAl?->{'ni_al-nombre'} ?? '')));
         $niEmActivaPlan = strtoupper(trim((string) ($niEm?->{'ni_em-activa_plan'} ?? 'NO')));
 
+        $isAviso = $niAlCod !== '' && (str_contains($niAlNombre, 'AVISO') || $niAlCod === 'AVISO' || $niAlCod === 'AV' || str_starts_with($niAlCod, 'AV'));
         $isPrealerta = $niAlCod !== '' && (str_starts_with($niAlCod, 'P') || str_contains($niAlNombre, 'PREALERTA'));
         $scenario = 'NORMALIDAD';
-        if ($isPrealerta) {
+        if ($isAviso) {
+            $scenario = 'AVISO';
+        } elseif ($isPrealerta) {
             $scenario = 'PREALERTA';
         } elseif ($nivelAlertaIdResolved !== '' && $niEmActivaPlan === 'SI') {
             $scenario = 'ACTIVACION';
@@ -2138,26 +2348,14 @@ class ActivationController extends Controller
             }
         }
 
-        if ($scenario === 'PREALERTA' && Schema::hasTable('accion_set_cfg')) {
-            $pre = DB::table('accion_set_cfg')
-                ->whereIn('ac_se-cod', ['AS01', 'AS04'])
-                ->whereRaw("UPPER(COALESCE(`ac_se-activo`, 'SI')) <> 'NO'")
-                ->when(
-                    Schema::hasColumn('accion_set_cfg', 'ac_se-tenant_id'),
-                    static fn ($q) => $q->where('ac_se-tenant_id', $tenantId),
-                )
-                ->pluck('ac_se-id')
-                ->all();
-            if (! empty($pre)) {
-                $actionSetIds = array_values(array_unique(array_map('strval', $pre)));
-            } else {
-                $warnings[] = 'PREALERTA: no se encontraron action sets AS01/AS04 activos.';
-            }
-        } elseif ($scenario !== 'PREALERTA' && ! empty($actionSetIds)) {
+        if ($scenario !== 'PREALERTA' && ! empty($actionSetIds)) {
             $actionSetIds = [array_values($actionSetIds)[0]];
         }
 
         $actionSetIds = array_values(array_unique(array_filter($actionSetIds, static fn ($v) => is_string($v) && trim($v) !== '')));
+        if ($scenario === 'AVISO') {
+            $actionSetIds = [];
+        }
         $actionSetId = $actionSetIds[0] ?? null;
 
         if ($nivelAlertaIdResolved !== '' && empty($actionSetIds) && $scenario !== 'PREALERTA') {
