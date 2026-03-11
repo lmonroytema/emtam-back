@@ -2,6 +2,14 @@
 
 Backend API para EMTA, construido con Laravel 12. Incluye autenticación por tokens (Sanctum), multi-tenant por cabecera, selección de idioma por usuario/tenant y carga automática del modelo de datos desde un Excel.
 
+## Funcionalidades principales
+
+- API CRUD genérica por tabla y endpoints directos por tabla
+- Activación del plan y gestión de niveles de alerta
+- Gestión de roles, grupos operativos y asignaciones
+- Notificaciones y confirmaciones de disponibilidad
+- Multi-tenant con selección automática de idioma
+
 ## Requisitos
 
 - PHP 8.2+
@@ -40,6 +48,10 @@ DB_PASSWORD=
 
 - `emta-backend/260114 AppTabs.xlsx` (preferido)
 - o `../260114 AppTabs.xlsx` (alternativa)
+
+Si usas CSVs adicionales:
+
+- `emta-backend/CSV/Criterios_alerta.csv`
 
 5) Migrar y seed:
 
@@ -160,3 +172,40 @@ php artisan test
   - verifica que `260114 AppTabs.xlsx` está en `emta-backend/` o en la carpeta padre.
 - Si cambias el Excel:
   - vuelve a ejecutar `php artisan migrate:fresh --seed --force` para regenerar tablas y datos.
+
+## Deploy (producción)
+
+1) Configurar `.env`:
+
+- `APP_ENV=production`
+- `APP_DEBUG=false`
+- `APP_URL=https://tu-dominio`
+- Ajustar `DB_*`, `MAIL_*`, `QUEUE_CONNECTION` y `FILESYSTEM_DISK`
+
+2) Instalar dependencias y caches:
+
+```bash
+composer install --no-dev --optimize-autoloader
+php artisan key:generate
+php artisan config:cache
+php artisan route:cache
+php artisan view:cache
+```
+
+3) Migraciones:
+
+```bash
+php artisan migrate --force
+```
+
+4) Storage y assets:
+
+```bash
+php artisan storage:link
+```
+
+5) Colas (si `QUEUE_CONNECTION=database`):
+
+```bash
+php artisan queue:work --daemon
+```
