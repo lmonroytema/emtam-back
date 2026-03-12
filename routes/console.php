@@ -1121,3 +1121,142 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
 
     return 0;
 })->purpose('Migrar CSVs con revisión individual por tabla');
+
+Artisan::command('inconsistencias:acciones {--out=}', function () {
+    $outPath = trim((string) $this->option('out'));
+    if ($outPath === '') {
+        $outPath = storage_path('app/inconsistencias_acciones.csv');
+    }
+    $dir = dirname($outPath);
+    if (! is_dir($dir)) {
+        @mkdir($dir, 0775, true);
+    }
+
+    $pickColumn = static function (array $columns, array $patterns): ?string {
+        foreach ($patterns as $pattern) {
+            foreach ($columns as $c) {
+                if (preg_match($pattern, $c)) {
+                    return $c;
+                }
+            }
+        }
+        return null;
+    };
+
+    $accionCols = Schema::getColumnListing('accion_operativa_cfg');
+    $detalleCols = Schema::getColumnListing('accion_set_detalle_cfg');
+    $detalleCanalCols = Schema::getColumnListing('accion_set_detalle_canal_cfg');
+
+    $accionPkCol = $pickColumn($accionCols, ['/-id$/i', '/ac_op.*id/i']);
+    $accionCodCol = $pickColumn($accionCols, ['/-cod$/i', '/cod/i']);
+    $accionDescCol = $pickColumn($accionCols, ['/descrip/i', '/descripcion/i', '/nombre/i']);
+    $accionTenantCol = $pickColumn($accionCols, ['/tenant_id/i']);
+
+    $detallePkCol = $pickColumn($detalleCols, ['/-id$/i', '/ac_se_de.*id/i']);
+    $detalleAccionCol = $pickColumn($detalleCols, ['/-ac_op_id-fk$/i', '/ac_op/i']);
+    $detalleRolCol = $pickColumn($detalleCols, ['/-rol_id-fk$/i', '/rol/i']);
+    $detalleDescCol = $pickColumn($detalleCols, ['/detalle/i', '/descrip/i', '/descripcion/i', '/nombre/i']);
+    $detalleTenantCol = $pickColumn($detalleCols, ['/tenant_id/i']);
+
+    $detalleCanalDetalleCol = $pickColumn($detalleCanalCols, ['/-ac_se_de_id-fk$/i', '/ac_se_de/i']);
+    $detalleCanalCanalCol = $pickColumn($detalleCanalCols, ['/-ca_co_id-fk$/i', '/ca_co/i', '/canal/i']);
+
+    $accionRows = DB::table('accion_operativa_cfg')->get();
+    $detalleRows = DB::table('accion_set_detalle_cfg')->get();
+    $detalleCanalRows = DB::table('accion_set_detalle_canal_cfg')->get();
+
+    $canalCountByDetalleId = [];
+    if ($detalleCanalDetalleCol && $detalleCanalCanalCol) {
+        foreach ($detalleCanalRows as $r) {
+            $detId = trim((string) ($r->{$detalleCanalDetalleCol} ?? ''));
+            $caId = trim((string) ($r->{$detalleCanalCanalCol} ?? ''));
+            if ($detId === '' || $caId === '') {
+                continue;
+            }
+            $canalCountByDetalleId[$detId] = ($canalCountByDetalleId[$detId] ?? 0) + 1;
+        }
+    }
+
+    $detallesByAccion = [];
+    foreach ($detalleRows as $d) {
+        if (! $detalleAccionCol) {
+            continue;
+        }
+        $accionId = trim((string) ($d->{$detalleAccionCol} ?? ''));
+        if ($accionId === '') {
+            continue;
+        }
+        $detallesByAccion[$accionId][] = $d;
+    }
+
+    $fh = fopen($outPath, 'wb');
+    if ($fh === false) {
+        $this->error('No se pudo abrir el archivo de salida: '.$outPath);
+        return 1;
+    }
+
+    fputcsv($fh, [
+        'accion_id',
+        'accion_codigo',
+        'accion_descripcion',
+        'tenant_id',
+        'detalle_id',
+        'detalle_descripcion',
+        'problemas',
+    ]);
+
+    $totalIssues = 0;
+
+    foreach ($accionRows as $a) {
+        $accionId = $accionPkCol ? trim((string) ($a->{$accionPkCol} ?? '')) : '';
+        if ($accionId === '') {
+            continue;
+        }
+        $accionCod = $accionCodCol ? trim((string) ($a->{$accionCodCol} ?? '')) : '';
+        $accionDesc = $accionDescCol ? trim((string) ($a->{$accionDescCol} ?? '')) : '';
+        $tenantId = $accionTenantCol ? trim((string) ($a->{$accionTenantCol} ?? '')) : '';
+
+        $detalles = $detallesByAccion[$accionId] ?? [];
+        if (empty($detalles)) {
+            fputcsv($fh, [$accionId, $accionCod, $accionDesc, $tenantId, '', '', 'SIN_DETALLE']);
+            $totalIssues++;
+            continue;
+        }
+
+        foreach ($detalles as $d) {
+            $issues = [];
+            $detalleId = $detallePkCol ? trim((string) ($d->{$detallePkCol} ?? '')) : '';
+            $detalleDesc = $detalleDescCol ? trim((string) ($d->{$detalleDescCol} ?? '')) : '';
+            $rolId = $detalleRolCol ? trim((string) ($d->{$detalleRolCol} ?? '')) : '';
+
+            if ($rolId === '') {
+                $issues[] = 'ROL_VACIO';
+            }
+            if ($detalleDesc === '') {
+                $issues[] = 'DETALLE_VACIO';
+            }
+            if ($detalleId !== '' && ($canalCountByDetalleId[$detalleId] ?? 0) === 0) {
+                $issues[] = 'SIN_CANALES';
+            }
+
+            if (! empty($issues)) {
+                fputcsv($fh, [
+                    $accionId,
+                    $accionCod,
+                    $accionDesc,
+                    $tenantId ?: ($detalleTenantCol ? trim((string) ($d->{$detalleTenantCol} ?? '')) : ''),
+                    $detalleId,
+                    $detalleDesc,
+                    implode('|', $issues),
+                ]);
+                $totalIssues++;
+            }
+        }
+    }
+
+    fclose($fh);
+    $this->info('CSV generado: '.$outPath);
+    $this->info('Inconsistencias detectadas: '.$totalIssues);
+
+    return 0;
+})->purpose('Exporta inconsistencias de acciones operativas a CSV');
