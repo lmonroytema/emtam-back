@@ -571,6 +571,15 @@ class ActivationController extends Controller
                 'nombre' => $nombre !== '' ? $nombre : $perId,
                 'acciones' => [],
             ];
+            if (($byPerson[$perId]['email'] ?? null) === null && $email !== '') {
+                $byPerson[$perId]['email'] = $email;
+            }
+            if (($byPerson[$perId]['tel_mov'] ?? null) === null && $telMov !== '') {
+                $byPerson[$perId]['tel_mov'] = $telMov;
+            }
+            if (($byPerson[$perId]['nombre'] ?? '') === $perId && $nombre !== '') {
+                $byPerson[$perId]['nombre'] = $nombre;
+            }
             $byPerson[$perId]['acciones'][] = [
                 'ejecucion_id' => (string) ($r->ejecucion_id ?? ''),
                 'accion_detalle_id' => (string) ($r->accion_detalle_id ?? ''),
@@ -636,12 +645,15 @@ class ActivationController extends Controller
             $testWhatsappNumbers = array_values(array_unique($numbers));
         }
 
-        $mode = app()->environment('local') ? 'file' : 'mail';
+        $mode = $this->resolveNotificationMode();
         $ts = now()->format('Ymd_His');
         $sent = 0;
         $filesWritten = 0;
         $whatsappSent = 0;
         $whatsappFilesWritten = 0;
+        $warnings = [];
+        $sentRecipients = [];
+        $failedRecipients = [];
 
         if ($mode === 'file') {
             $dir = 'notifications_outbox/'.$tenantId.'/'.$activationId;
@@ -792,7 +804,8 @@ class ActivationController extends Controller
 
         if ($productionMode) {
             foreach ($people as $p) {
-                $to = (string) ($p['email'] ?? '');
+                $rawTo = trim((string) ($p['email'] ?? ''));
+                $to = filter_var($rawTo, FILTER_VALIDATE_EMAIL) ? strtolower($rawTo) : '';
                 $subject = $emailSubject;
                 $accionesByTipo = $buildActionsByTipo(is_array($p['acciones'] ?? null) ? $p['acciones'] : []);
                 $hasTitular = ! empty($accionesByTipo['TITULAR'] ?? []);
@@ -800,12 +813,14 @@ class ActivationController extends Controller
                 $rolesLabel = $hasTitular && $hasSuplente
                     ? 'TITULAR / SUPLENTE'
                     : ($hasTitular ? 'TITULAR' : ($hasSuplente ? 'SUPLENTE' : '—'));
+                $emailSent = false;
+                $emailError = '';
 
                 $body = $emailBody;
                 $bodyHtml = '<div style="font-family: Arial, sans-serif; font-size: 14px; color: #111; line-height: 1.6;">'
                     .'<div style="font-size: 16px; font-weight: 700; margin-bottom: 12px;">'.$escapeHtml($subject).'</div>'
                     .($notificationMessage !== ''
-                        ? '<div style="margin-bottom: 12px;">'.nl2br($escapeHtml($notificationMessage)).'</div>'
+                        ? '<div style="margin-bottom: 12px;">'.$this->renderNotificationHtml($notificationMessage).'</div>'
                         : '')
                     .'<div style="margin: 12px 0; padding: 10px 12px; background: #f6f6f6; border: 1px solid #e5e5e5; border-radius: 8px;">'
                     .'<div><strong>Plan:</strong> '.$escapeHtml($planName).'</div>'
@@ -842,11 +857,27 @@ class ActivationController extends Controller
                     $filesWritten++;
                 } else {
                     if ($to !== '') {
-                        Mail::html($bodyHtml, static function ($m) use ($to, $subject) {
-                            $m->to($to)->subject($subject);
-                        });
-                        $sent++;
+                        try {
+                            Mail::html($bodyHtml, static function ($m) use ($to, $subject) {
+                                $m->to($to)->subject($subject);
+                            });
+                            $sent++;
+                            $emailSent = true;
+                            $sentRecipients[] = $to;
+                        } catch (\Throwable $mailErrorEx) {
+                            $emailSent = false;
+                            $emailError = trim((string) $mailErrorEx->getMessage());
+                        }
+                    } else {
+                        $emailError = 'email destinatario no válido o ausente';
                     }
+                }
+                if ($mode !== 'file' && ! $emailSent) {
+                    $failedRecipients[] = [
+                        'per_id' => (string) ($p['per_id'] ?? ''),
+                        'email' => $to !== '' ? $to : null,
+                        'reason' => $emailError !== '' ? $emailError : 'email no enviado',
+                    ];
                 }
 
                 if (Schema::hasTable('notificacion_envio_trs')) {
@@ -860,13 +891,23 @@ class ActivationController extends Controller
                         'no_en-ca_co_id-fk' => null,
                         'no_en-mensaje' => $notificationMessage !== '' ? $notificationMessage : $subject,
                         'no_en-ts' => now()->toDateTimeString(),
-                        'no_en-estado' => $mode === 'file' ? 'SIMULADO' : 'ENVIADO',
+                        'no_en-estado' => $mode === 'file' ? 'SIMULADO' : ($emailSent ? 'ENVIADO' : 'SIMULADO'),
                         'no_en-num_de_intento' => '0',
                     ];
+                    if ($mode !== 'file' && ! $emailSent) {
+                        $extra = $emailError !== ''
+                            ? '[email no enviado: '.$emailError.']'
+                            : '[email destinatario no válido o ausente]';
+                        $insert['no_en-mensaje'] = trim(($insert['no_en-mensaje'] ?? '').' '.$extra);
+                    }
                     if (Schema::hasColumn('notificacion_envio_trs', 'no_en-modo')) {
                         $insert['no_en-modo'] = $modoLabel;
                     }
-                    DB::table('notificacion_envio_trs')->insert($insert);
+                    try {
+                        DB::table('notificacion_envio_trs')->insert($insert);
+                    } catch (\Throwable $logError) {
+                        $warnings[] = 'No se pudo registrar notificación email para persona '.$p['per_id'].': '.$logError->getMessage();
+                    }
                 }
 
                 $index['recipients'][] = [
@@ -882,7 +923,7 @@ class ActivationController extends Controller
                 $bodyHtml = '<div style="font-family: Arial, sans-serif; font-size: 14px; color: #111; line-height: 1.6;">'
                     .'<div style="font-size: 16px; font-weight: 700; margin-bottom: 12px;">'.$escapeHtml($subject).'</div>'
                     .($notificationMessage !== ''
-                        ? '<div style="margin-bottom: 12px;">'.nl2br($escapeHtml($notificationMessage)).'</div>'
+                        ? '<div style="margin-bottom: 12px;">'.$this->renderNotificationHtml($notificationMessage).'</div>'
                         : '')
                     .'<div style="margin: 12px 0; padding: 10px 12px; background: #f6f6f6; border: 1px solid #e5e5e5; border-radius: 8px;">'
                     .'<div><strong>Plan:</strong> '.$escapeHtml($planName).'</div>'
@@ -913,10 +954,21 @@ class ActivationController extends Controller
                     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
                     $filesWritten++;
                 } else {
-                    Mail::html($bodyHtml, static function ($m) use ($testEmail, $subject) {
-                        $m->to($testEmail)->subject($subject);
-                    });
-                    $sent++;
+                    try {
+                        Mail::html($bodyHtml, static function ($m) use ($testEmail, $subject) {
+                            $m->to($testEmail)->subject($subject);
+                        });
+                        $sent++;
+                        $sentRecipients[] = $testEmail;
+                    } catch (\Throwable $mailErrorEx) {
+                        $error = trim((string) $mailErrorEx->getMessage());
+                        $warnings[] = 'No se pudo enviar email de prueba a '.$testEmail.': '.$error;
+                        $failedRecipients[] = [
+                            'per_id' => null,
+                            'email' => $testEmail,
+                            'reason' => $error !== '' ? $error : 'email de prueba no enviado',
+                        ];
+                    }
                 }
 
                 if (Schema::hasTable('notificacion_envio_trs')) {
@@ -936,7 +988,11 @@ class ActivationController extends Controller
                     if (Schema::hasColumn('notificacion_envio_trs', 'no_en-modo')) {
                         $insert['no_en-modo'] = $modoLabel;
                     }
-                    DB::table('notificacion_envio_trs')->insert($insert);
+                    try {
+                        DB::table('notificacion_envio_trs')->insert($insert);
+                    } catch (\Throwable $logError) {
+                        $warnings[] = 'No se pudo registrar notificación email de prueba a '.$testEmail.': '.$logError->getMessage();
+                    }
                 }
 
                 $index['recipients'][] = [
@@ -947,136 +1003,7 @@ class ActivationController extends Controller
             }
         }
 
-        $normalizePhone = static function (?string $raw): ?string {
-            $s = trim((string) ($raw ?? ''));
-            if ($s === '') {
-                return null;
-            }
-            $s = preg_replace('/[()\-\.\s]+/', '', $s) ?? '';
-            if ($s === '') {
-                return null;
-            }
-            if (str_starts_with($s, '+')) {
-                $digits = preg_replace('/\D+/', '', substr($s, 1)) ?? '';
-                $s = $digits !== '' ? '+'.$digits : '';
-            } else {
-                $s = preg_replace('/\D+/', '', $s) ?? '';
-            }
-            if ($s === '' || preg_match('/^\+?\d{8,15}$/', $s) !== 1) {
-                return null;
-            }
-
-            return $s;
-        };
-
         $whatsappTargets = [];
-        if ($productionMode) {
-            foreach ($people as $p) {
-                $n = $normalizePhone(is_string($p['tel_mov'] ?? null) ? $p['tel_mov'] : null);
-                if ($n === null) {
-                    continue;
-                }
-                $perId = trim((string) ($p['per_id'] ?? ''));
-                if (! array_key_exists($n, $whatsappTargets)) {
-                    $whatsappTargets[$n] = ['to' => $n, 'per_ids' => []];
-                }
-                if ($perId !== '' && ! in_array($perId, $whatsappTargets[$n]['per_ids'], true)) {
-                    $whatsappTargets[$n]['per_ids'][] = $perId;
-                }
-            }
-        } else {
-            foreach ($testWhatsappNumbers as $n) {
-                $n = $normalizePhone(is_string($n) ? $n : null);
-                if ($n === null) {
-                    continue;
-                }
-                if (! array_key_exists($n, $whatsappTargets)) {
-                    $whatsappTargets[$n] = ['to' => $n, 'per_ids' => []];
-                }
-            }
-        }
-        $whatsappTargets = array_values($whatsappTargets);
-
-        if (! empty($whatsappTargets)) {
-            $waDir = 'whatsapp_outbox/'.$tenantId.'/'.$activationId;
-            if (! Storage::disk('local')->exists($waDir)) {
-                Storage::disk('local')->makeDirectory($waDir);
-            }
-
-            $appUrl = rtrim((string) config('app.url', ''), '/');
-            $activationUrl = $appUrl !== '' ? $appUrl.'/activacion/'.rawurlencode($activationId) : null;
-            $waMessageLines = [
-                'Plan Activo',
-                'Activación: '.$activationId,
-            ];
-            if (! $productionMode) {
-                $waMessageLines[] = '[PRUEBA]';
-            }
-            if ($activationUrl) {
-                $waMessageLines[] = 'Enlace: '.$activationUrl;
-            }
-            $waMessage = implode("\n", $waMessageLines)."\n";
-            $webhookUrl = trim((string) env('WHATSAPP_WEBHOOK_URL', ''));
-
-            foreach ($whatsappTargets as $t) {
-                $toNumber = (string) ($t['to'] ?? '');
-                $perIds = is_array($t['per_ids'] ?? null) ? $t['per_ids'] : [];
-                $sentOk = false;
-                if ($webhookUrl !== '') {
-                    try {
-                        $res = $this->postWhatsappWebhook($webhookUrl, [
-                            'tenant_id' => $tenantId,
-                            'activation_id' => $activationId,
-                            'to' => $toNumber,
-                            'message' => $waMessage,
-                        ]);
-                        $sentOk = $res instanceof HttpClientResponse ? $res->successful() : false;
-                    } catch (\Throwable) {
-                        $sentOk = false;
-                    }
-                }
-
-                $safe = preg_replace('/[^A-Za-z0-9._-]+/', '_', $toNumber) ?: 'destino';
-                $jsonPath = $waDir.'/'.$ts.'-'.$safe.'.json';
-                Storage::disk('local')->put($jsonPath, json_encode([
-                    'tenant_id' => $tenantId,
-                    'activation_id' => $activationId,
-                    'to' => $toNumber,
-                    'message' => $waMessage,
-                    'sent_via_webhook' => $sentOk,
-                    'generated_at' => now()->toDateTimeString(),
-                ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-                $whatsappFilesWritten++;
-
-                if ($sentOk) {
-                    $whatsappSent++;
-                }
-
-                if (Schema::hasTable('notificacion_envio_trs')) {
-                    $perIdForLog = null;
-                    if (count($perIds) === 1) {
-                        $perIdForLog = $perIds[0];
-                    }
-                    $insert = [
-                        'no_en-id' => 'NOEN-'.Str::uuid()->toString(),
-                        'no_en-tenant_id' => $tenantId,
-                        'no_en-ac_de_pl_id-fk' => $activationId,
-                        'no_en-per_id-fk' => $perIdForLog,
-                        'no_en-gr_op_id-fk' => null,
-                        'no_en-rol_id-fk' => null,
-                        'no_en-ca_co_id-fk' => 'WHATSAPP',
-                        'no_en-mensaje' => $waMessage."\nDestino: ".$toNumber,
-                        'no_en-ts' => now()->toDateTimeString(),
-                        'no_en-estado' => ($mode === 'file' || ! $sentOk) ? 'SIMULADO' : 'ENVIADO',
-                        'no_en-num_de_intento' => '0',
-                    ];
-                    if (Schema::hasColumn('notificacion_envio_trs', 'no_en-modo')) {
-                        $insert['no_en-modo'] = $modoLabel;
-                    }
-                    DB::table('notificacion_envio_trs')->insert($insert);
-                }
-            }
-        }
 
         if ($mode === 'file') {
             $indexPath = 'notifications_outbox/'.$tenantId.'/'.$activationId.'/'.$ts.'-index.json';
@@ -1090,11 +1017,21 @@ class ActivationController extends Controller
             'sent' => $sent,
             'files_written' => $filesWritten,
             'recipients' => count($people),
+            'recipient_emails' => array_values(array_unique(array_values(array_filter(array_map(
+                static fn ($r) => strtolower(trim((string) ($r['email'] ?? ''))),
+                is_array($index['recipients'] ?? null) ? $index['recipients'] : [],
+            ), static fn ($email) => $email !== '')))),
+            'sent_recipient_emails' => array_values(array_unique(array_values(array_filter(array_map(
+                static fn ($e) => strtolower(trim((string) $e)),
+                $sentRecipients,
+            ), static fn ($email) => $email !== '')))),
+            'failed_recipients' => $failedRecipients,
             'whatsapp_sent' => $whatsappSent,
             'whatsapp_files_written' => $whatsappFilesWritten,
             'whatsapp_recipients' => count($whatsappTargets),
             'email_subject' => $emailSubject,
             'email_body' => $emailBody,
+            'warnings' => $warnings,
         ]);
     }
 
@@ -1250,7 +1187,7 @@ class ActivationController extends Controller
             .'<div style="font-size: 12px; color: #666;">'.$escapeHtml($modeLabel).'</div>'
             .'</div>';
 
-        $mode = app()->environment('local') ? 'file' : 'mail';
+        $mode = $this->resolveNotificationMode();
         $sent = 0;
         $filesWritten = 0;
         $ts = now()->format('YmdHis');
@@ -1465,7 +1402,7 @@ class ActivationController extends Controller
             .'<div style="font-size: 12px; color: #666; margin-top: 10px;">'.$escapeHtml($modeLabel).'</div>'
             .'</div>';
 
-        $mode = app()->environment('local') ? 'file' : 'mail';
+        $mode = $this->resolveNotificationMode();
         $sent = 0;
         $filesWritten = 0;
         $ts = now()->format('YmdHis');
@@ -1506,6 +1443,29 @@ class ActivationController extends Controller
             'email_subject' => $subject,
             'email_body' => strip_tags($bodyHtml),
         ]);
+    }
+
+    private function resolveNotificationMode(): string
+    {
+        $forceFile = filter_var((string) env('NOTIFICATIONS_FORCE_FILE_MODE', 'false'), FILTER_VALIDATE_BOOL);
+        return $forceFile ? 'file' : 'mail';
+    }
+
+    private function renderNotificationHtml(string $text): string
+    {
+        $escaped = htmlspecialchars($text, ENT_QUOTES, 'UTF-8');
+        $withLinks = preg_replace_callback(
+            '/(https?:\/\/[^\s<]+)/iu',
+            static function (array $matches): string {
+                $url = $matches[1] ?? '';
+                if ($url === '') {
+                    return '';
+                }
+                return '<a href="'.$url.'" target="_blank" rel="noopener noreferrer">'.$url.'</a>';
+            },
+            $escaped,
+        ) ?? $escaped;
+        return nl2br($withLinks);
     }
 
     private function postWhatsappWebhook(string $webhookUrl, array $payload): HttpClientResponse|\GuzzleHttp\Promise\PromiseInterface
@@ -1572,13 +1532,19 @@ class ActivationController extends Controller
                 'email' => $email !== '' ? $email : null,
                 'nombre' => $nombre !== '' ? $nombre : $perId,
             ];
+            if (($byPerson[$perId]['email'] ?? null) === null && $email !== '') {
+                $byPerson[$perId]['email'] = $email;
+            }
+            if (($byPerson[$perId]['nombre'] ?? '') === $perId && $nombre !== '') {
+                $byPerson[$perId]['nombre'] = $nombre;
+            }
         }
 
         $people = array_values($byPerson);
         if (empty($people)) {
             return response()->json([
                 'message' => 'OK',
-                'mode' => app()->environment('local') ? 'file' : 'mail',
+                'mode' => $this->resolveNotificationMode(),
                 'sent' => 0,
                 'files_written' => 0,
             ]);
@@ -1623,7 +1589,7 @@ class ActivationController extends Controller
             }
         }
 
-        $mode = app()->environment('local') ? 'file' : 'mail';
+        $mode = $this->resolveNotificationMode();
         $ts = now()->format('Ymd_His');
         $sent = 0;
         $filesWritten = 0;
@@ -1649,7 +1615,12 @@ class ActivationController extends Controller
         ];
 
         foreach ($people as $p) {
-            $to = $productionMode ? (string) ($p['email'] ?? '') : implode(',', $testEmails);
+            $rawTo = trim((string) ($p['email'] ?? ''));
+            $to = $productionMode
+                ? (filter_var($rawTo, FILTER_VALIDATE_EMAIL) ? strtolower($rawTo) : '')
+                : implode(',', $testEmails);
+            $emailSent = false;
+            $emailError = '';
             $lines = [];
             $lines[] = 'ACTIVACION: '.$activationId;
             if (! $productionMode) {
@@ -1689,10 +1660,16 @@ class ActivationController extends Controller
             } else {
                 if ($productionMode) {
                     if ($to !== '') {
-                        Mail::raw($body, static function ($m) use ($to, $subject) {
-                            $m->to($to)->subject($subject);
-                        });
-                        $sent++;
+                        try {
+                            Mail::raw($body, static function ($m) use ($to, $subject) {
+                                $m->to($to)->subject($subject);
+                            });
+                            $sent++;
+                            $emailSent = true;
+                        } catch (\Throwable $mailErrorEx) {
+                            $emailSent = false;
+                            $emailError = trim((string) $mailErrorEx->getMessage());
+                        }
                     }
                 } elseif (! empty($testEmails)) {
                     Mail::raw($body, static function ($m) use ($testEmails, $subject) {
@@ -1713,9 +1690,15 @@ class ActivationController extends Controller
                     'no_en-ca_co_id-fk' => null,
                     'no_en-mensaje' => $subject,
                     'no_en-ts' => now()->toDateTimeString(),
-                    'no_en-estado' => $mode === 'file' ? 'SIMULADO' : 'ENVIADO',
+                    'no_en-estado' => $mode === 'file' ? 'SIMULADO' : ($emailSent ? 'ENVIADO' : 'SIMULADO'),
                     'no_en-num_de_intento' => '0',
                 ];
+                if ($mode !== 'file' && ! $emailSent) {
+                    $extra = $emailError !== ''
+                        ? '[email no enviado: '.$emailError.']'
+                        : '[email destinatario no válido o ausente]';
+                    $insert['no_en-mensaje'] = trim(($insert['no_en-mensaje'] ?? '').' '.$extra);
+                }
                 if (Schema::hasColumn('notificacion_envio_trs', 'no_en-modo')) {
                     $insert['no_en-modo'] = $modoLabel;
                 }
