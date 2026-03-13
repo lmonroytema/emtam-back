@@ -1,5 +1,9 @@
 <?php
 
+try {
+    file_put_contents(__DIR__ . '/global_hit.txt', date('Y-m-d H:i:s') . " - " . ($_SERVER['REQUEST_URI'] ?? 'unknown') . "\n", FILE_APPEND);
+} catch (\Throwable $e) {}
+
 use Illuminate\Foundation\Application;
 use Illuminate\Http\Request;
 
