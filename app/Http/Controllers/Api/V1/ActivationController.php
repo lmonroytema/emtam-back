@@ -362,12 +362,10 @@ class ActivationController extends Controller
                         }
 
                         $tipoAsign = strtoupper(trim((string) ($dest->{'pe_ro_gr-tipo_asignacion'} ?? '')));
-                        if ($tipoAsign !== '' && $tipoAsign !== 'TITULAR' && $tipoAsign !== 'SUPLENTE') {
+                        if ($tipoAsign !== '' && $tipoAsign !== 'TITULAR') {
                             continue;
                         }
-                        if ($tipoAsign === '') {
-                            $tipoAsign = 'SUPLENTE';
-                        }
+                        $tipoAsign = 'TITULAR';
 
                         $grOpId = $dest->{'pe_ro_gr-gr_op_id-fk'} ?? null;
                         $grOpIdStr = trim((string) ($grOpId ?? ''));
@@ -392,17 +390,6 @@ class ActivationController extends Controller
                         ];
                     }
 
-                    foreach (($manualAssignment['suplente_per_ids'] ?? []) as $sid) {
-                        $sidStr = trim((string) $sid);
-                        if ($sidStr === '') {
-                            continue;
-                        }
-                        $recipients[] = [
-                            'per_id' => $sidStr,
-                            'gr_op_id' => $manualGrOpId,
-                            'tipo_asignacion' => 'SUPLENTE',
-                        ];
-                    }
                 }
 
                 $recipients = array_values(array_filter($recipients, static function ($r) {
