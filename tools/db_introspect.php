@@ -10,5 +10,7 @@ $kernel->bootstrap();
 
 $table = $argv[1] ?? 'accion_set_detalle_canal_cfg';
 $db = $argv[2] ?? 'emta_db';
-$cols = DB::select("SHOW COLUMNS FROM {$db}.{$table}");
+/** @var \Illuminate\Database\DatabaseManager $dbService */
+$dbService = $app->make('db');
+$cols = $dbService->select("SHOW COLUMNS FROM {$db}.{$table}");
 echo json_encode($cols, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);

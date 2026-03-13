@@ -2,8 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 
-function spaIndexPath(): ?string
-{
+$spaIndexPath = function (): ?string {
     $candidates = [
         public_path('index.html'),
         public_path('spa/index.html'),
@@ -16,10 +15,10 @@ function spaIndexPath(): ?string
     }
 
     return null;
-}
+};
 
-Route::get('/', function () {
-    $spaIndex = spaIndexPath();
+Route::get('/', function () use ($spaIndexPath) {
+    $spaIndex = $spaIndexPath();
 
     if ($spaIndex) {
         return response()->file($spaIndex);
@@ -28,8 +27,8 @@ Route::get('/', function () {
     return view('welcome');
 });
 
-Route::fallback(function () {
-    $spaIndex = spaIndexPath();
+Route::fallback(function () use ($spaIndexPath) {
+    $spaIndex = $spaIndexPath();
 
     if ($spaIndex) {
         return response()->file($spaIndex);

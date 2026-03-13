@@ -85,13 +85,17 @@ class ActivationController extends Controller
             $isAviso = $niAlCod !== '' && (str_contains($niAlNombre, 'AVISO') || $niAlCod === 'AVISO' || $niAlCod === 'AV' || str_starts_with($niAlCod, 'AV'));
             $isPrealerta = str_starts_with($niAlCod, 'P') || str_contains($niAlNombre, 'PREALERTA');
 
+            if ($isPrealerta && $isAviso) {
+                $isAviso = false;
+            }
+
             $scenario = 'NORMALIDAD';
-            if ($isAviso) {
-                $scenario = 'AVISO';
+            if ($niEmActivaPlan === 'SI') {
+                $scenario = 'ACTIVACION';
             } elseif ($isPrealerta) {
                 $scenario = 'PREALERTA';
-            } elseif ($niEmActivaPlan === 'SI') {
-                $scenario = 'ACTIVACION';
+            } elseif ($isAviso) {
+                $scenario = 'AVISO';
             }
 
             if ($scenario === 'ACTIVACION') {
@@ -197,6 +201,12 @@ class ActivationController extends Controller
             }
 
             $actionSetIds = array_values(array_unique(array_filter($actionSetIds, static fn ($v) => is_string($v) && trim($v) !== '')));
+            if ($scenario === 'ACTIVACION' && empty($actionSetIds)) {
+                return response()->json([
+                    'message' => 'No se encontraron acciones operativas configuradas para este riesgo y nivel de alerta.',
+                ], 422);
+            }
+
             if ($scenario === 'AVISO') {
                 $actionSetIds = [];
             }
@@ -276,14 +286,8 @@ class ActivationController extends Controller
 
             if (! Schema::hasTable('accion_set_detalle_cfg')) {
                 return response()->json([
-                    'activation_id' => $activationId,
-                    'scenario' => $scenario,
-                    'action_set_ids' => $actionSetIds,
-                    'unassigned_actions' => [],
-                    'ejecucion_count' => 0,
-                    'notification_count' => 0,
                     'message' => 'Missing accion_set_detalle_cfg table.',
-                ], 201);
+                ], 422);
             }
 
             $detalles = DB::table('accion_set_detalle_cfg')
@@ -2270,14 +2274,19 @@ class ActivationController extends Controller
         $niEmActivaPlan = strtoupper(trim((string) ($niEm?->{'ni_em-activa_plan'} ?? 'NO')));
 
         $isAviso = $niAlCod !== '' && (str_contains($niAlNombre, 'AVISO') || $niAlCod === 'AVISO' || $niAlCod === 'AV' || str_starts_with($niAlCod, 'AV'));
-        $isPrealerta = $niAlCod !== '' && (str_starts_with($niAlCod, 'P') || str_contains($niAlNombre, 'PREALERTA'));
+        $isPrealerta = str_starts_with($niAlCod, 'P') || str_contains($niAlNombre, 'PREALERTA');
+
+        if ($isPrealerta && $isAviso) {
+            $isAviso = false;
+        }
+
         $scenario = 'NORMALIDAD';
-        if ($isAviso) {
-            $scenario = 'AVISO';
+        if ($niEmActivaPlan === 'SI') {
+            $scenario = 'ACTIVACION';
         } elseif ($isPrealerta) {
             $scenario = 'PREALERTA';
-        } elseif ($nivelAlertaIdResolved !== '' && $niEmActivaPlan === 'SI') {
-            $scenario = 'ACTIVACION';
+        } elseif ($isAviso) {
+            $scenario = 'AVISO';
         }
 
         $actionSetIds = [];

@@ -93,8 +93,7 @@ $relationships = array_map(static fn ($r) => [
     'referenced_column' => $r['REFERENCED_COLUMN_NAME'],
 ], $fkRows);
 
-function detectModule(string $tableName, array $systemTables): string
-{
+$detectModule = static function (string $tableName, array $systemTables): string {
     if (array_key_exists($tableName, $systemTables)) {
         return 'system';
     }
@@ -104,11 +103,11 @@ function detectModule(string $tableName, array $systemTables): string
     }
 
     return 'otros';
-}
+};
 
 $tables = [];
 foreach ($tableNames as $tableName) {
-    $module = detectModule($tableName, $systemTables);
+    $module = $detectModule($tableName, $systemTables);
     $columns = $columnsByTable[$tableName] ?? [];
     $primaryKey = $pkByTable[$tableName] ?? [];
 
