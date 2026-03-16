@@ -499,8 +499,10 @@ class ActivationController extends Controller
             'accion_detalle_id' => ['nullable', 'string'],
             'recipient_emails' => ['nullable', 'array'],
             'recipient_emails.*' => ['nullable', 'string'],
+            'resolve_only' => ['nullable', 'boolean'],
         ]);
         $accionDetalleId = trim((string) ($validated['accion_detalle_id'] ?? ''));
+        $resolveOnly = (bool) ($validated['resolve_only'] ?? false);
         $targetEmails = array_values(array_unique(array_values(array_filter(array_map(
             static fn ($e) => strtolower(trim((string) $e)),
             is_array($validated['recipient_emails'] ?? null) ? $validated['recipient_emails'] : [],
@@ -688,6 +690,27 @@ class ActivationController extends Controller
                 }
                 return isset($targetSet[$email]);
             }));
+        }
+        if ($resolveOnly) {
+            return response()->json([
+                'message' => 'RESOLVED',
+                'mode' => 'mail',
+                'sent' => 0,
+                'files_written' => 0,
+                'recipients' => count($people),
+                'recipient_emails' => array_values(array_unique(array_values(array_filter(array_map(
+                    static fn ($p) => strtolower(trim((string) ($p['email'] ?? ''))),
+                    $people,
+                ), static fn ($email) => $email !== '')))),
+                'sent_recipient_emails' => [],
+                'failed_recipients' => [],
+                'warnings' => [],
+                'debug' => [
+                    'resolve_only' => true,
+                    'target_filter_count' => count($targetEmails),
+                    'resolved_people_count' => count($people),
+                ],
+            ]);
         }
 
         $modoLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
@@ -963,6 +986,9 @@ class ActivationController extends Controller
         $batchSize = 3;
         $batchDelayMs = 1500;
         $rateLimitBaseDelayMs = 1200;
+        $transientRetryDelayMs = max(1000, (int) env('MAIL_TRANSIENT_RETRY_DELAY_MS', 15000));
+        $rateLimitRetryDelayMs = max(1000, (int) env('MAIL_RATELIMIT_RETRY_DELAY_MS', 65000));
+        $cooldownAfterTransientFailureMs = max(0, (int) env('MAIL_COOLDOWN_AFTER_TRANSIENT_FAILURE_MS', 45000));
         $isTransientSmtpError = static function (string $error): bool {
             $msg = strtolower(trim($error));
             if ($msg === '') {
@@ -981,16 +1007,28 @@ class ActivationController extends Controller
                 || str_contains($msg, 'try again later')
                 || str_contains($msg, 'too many');
         };
-        $sendEmailWithRetry = static function (callable $sender) use ($isTransientSmtpError, $maxEmailAttempts, $rateLimitBaseDelayMs): array {
+        $isRateLimitSmtpError = static function (string $error): bool {
+            $msg = strtolower(trim($error));
+            if ($msg === '') {
+                return false;
+            }
+
+            return str_contains($msg, '451')
+                || str_contains($msg, '4.7.1')
+                || str_contains($msg, 'ratelimit')
+                || str_contains($msg, 'rate limit');
+        };
+        $sendEmailWithRetry = static function (callable $sender) use ($isTransientSmtpError, $isRateLimitSmtpError, $maxEmailAttempts, $rateLimitBaseDelayMs, $transientRetryDelayMs, $rateLimitRetryDelayMs): array {
             $attempt = 0;
             $lastError = '';
             $transientError = false;
+            $waitedMs = 0;
             while ($attempt < $maxEmailAttempts) {
                 $attempt++;
                 try {
                     $sender();
 
-                    return ['sent' => true, 'error' => '', 'attempts' => $attempt, 'transient_error' => false];
+                    return ['sent' => true, 'error' => '', 'attempts' => $attempt, 'transient_error' => false, 'waited_ms' => $waitedMs];
                 } catch (\Throwable $mailErrorEx) {
                     $lastError = trim((string) $mailErrorEx->getMessage());
                     $isTransient = $isTransientSmtpError($lastError);
@@ -998,12 +1036,15 @@ class ActivationController extends Controller
                     if (! $isTransient || $attempt >= $maxEmailAttempts) {
                         break;
                     }
-                    $delayMs = $rateLimitBaseDelayMs * (2 ** ($attempt - 1));
+                    $delayMs = $isRateLimitSmtpError($lastError)
+                        ? $rateLimitRetryDelayMs
+                        : max($transientRetryDelayMs, $rateLimitBaseDelayMs * (2 ** ($attempt - 1)));
                     usleep($delayMs * 1000);
+                    $waitedMs += $delayMs;
                 }
             }
 
-            return ['sent' => false, 'error' => $lastError, 'attempts' => $attempt, 'transient_error' => $transientError];
+            return ['sent' => false, 'error' => $lastError, 'attempts' => $attempt, 'transient_error' => $transientError, 'waited_ms' => $waitedMs];
         };
         $mailAttemptCounter = 0;
 
@@ -1080,8 +1121,9 @@ class ActivationController extends Controller
                             $emailSent = false;
                             $emailError = trim((string) ($mailResult['error'] ?? ''));
                             $attempts = (int) ($mailResult['attempts'] ?? 1);
+                            $retryWaitedMs = (int) ($mailResult['waited_ms'] ?? 0);
                             if (($mailResult['transient_error'] ?? false) === true) {
-                                $warnings[] = 'Se agotaron reintentos por error SMTP transitorio para '.$to.' (intentos: '.$attempts.').';
+                                $warnings[] = 'Se agotaron reintentos por error SMTP transitorio para '.$to.' (intentos: '.$attempts.', espera acumulada: '.round($retryWaitedMs / 1000, 1).'s).';
                             }
                         }
                         $appendDebugEvent([
@@ -1092,10 +1134,14 @@ class ActivationController extends Controller
                             'sent' => $emailSent,
                             'attempts' => (int) ($mailResult['attempts'] ?? 0),
                             'transient_error' => (bool) ($mailResult['transient_error'] ?? false),
+                            'retry_waited_ms' => (int) ($mailResult['waited_ms'] ?? 0),
                             'error' => $emailError,
                             'throttle_waited_seconds' => (int) ($throttleInfo['waited_seconds'] ?? 0),
                             'throttle_wait_cycles' => (int) ($throttleInfo['wait_cycles'] ?? 0),
                         ]);
+                        if (($mailResult['sent'] ?? false) !== true && ($mailResult['transient_error'] ?? false) === true && $cooldownAfterTransientFailureMs > 0) {
+                            usleep($cooldownAfterTransientFailureMs * 1000);
+                        }
                     } else {
                         $emailError = 'email destinatario no válido o ausente';
                         $appendDebugEvent([
@@ -1211,9 +1257,10 @@ class ActivationController extends Controller
                     } else {
                         $error = trim((string) ($mailResult['error'] ?? ''));
                         $attempts = (int) ($mailResult['attempts'] ?? 1);
+                        $retryWaitedMs = (int) ($mailResult['waited_ms'] ?? 0);
                         $warnings[] = 'No se pudo enviar email de prueba a '.$testEmail.': '.$error;
                         if (($mailResult['transient_error'] ?? false) === true) {
-                            $warnings[] = 'Se agotaron reintentos por error SMTP transitorio para email de prueba '.$testEmail.' (intentos: '.$attempts.').';
+                            $warnings[] = 'Se agotaron reintentos por error SMTP transitorio para email de prueba '.$testEmail.' (intentos: '.$attempts.', espera acumulada: '.round($retryWaitedMs / 1000, 1).'s).';
                         }
                         $failedRecipients[] = [
                             'per_id' => null,
@@ -1228,10 +1275,14 @@ class ActivationController extends Controller
                         'sent' => (bool) ($mailResult['sent'] ?? false),
                         'attempts' => (int) ($mailResult['attempts'] ?? 0),
                         'transient_error' => (bool) ($mailResult['transient_error'] ?? false),
+                        'retry_waited_ms' => (int) ($mailResult['waited_ms'] ?? 0),
                         'error' => trim((string) ($mailResult['error'] ?? '')),
                         'throttle_waited_seconds' => (int) ($throttleInfo['waited_seconds'] ?? 0),
                         'throttle_wait_cycles' => (int) ($throttleInfo['wait_cycles'] ?? 0),
                     ]);
+                    if (($mailResult['sent'] ?? false) !== true && ($mailResult['transient_error'] ?? false) === true && $cooldownAfterTransientFailureMs > 0) {
+                        usleep($cooldownAfterTransientFailureMs * 1000);
+                    }
                     $mailAttemptCounter++;
                     if ($mailAttemptCounter % $batchSize === 0) {
                         usleep($batchDelayMs * 1000);
@@ -1306,6 +1357,9 @@ class ActivationController extends Controller
                 'mailer' => $mailerName,
                 'smtp_configured' => $smtpConfigured,
                 'emails_per_minute' => $emailsPerMinute,
+                'transient_retry_delay_ms' => $transientRetryDelayMs,
+                'ratelimit_retry_delay_ms' => $rateLimitRetryDelayMs,
+                'cooldown_after_transient_failure_ms' => $cooldownAfterTransientFailureMs,
                 'target_filter_count' => count($targetEmails),
                 'resolved_people_count' => count($people),
                 'mail_attempt_counter' => $mailAttemptCounter,
