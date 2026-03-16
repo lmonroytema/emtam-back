@@ -14,7 +14,9 @@ use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -503,6 +505,7 @@ class ActivationController extends Controller
             static fn ($e) => strtolower(trim((string) $e)),
             is_array($validated['recipient_emails'] ?? null) ? $validated['recipient_emails'] : [],
         ), static fn ($email) => $email !== ''))));
+        try {
 
         if (
             ! Schema::hasTable('ejecucion_accion_trs')
@@ -689,12 +692,6 @@ class ActivationController extends Controller
 
         $modoLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
         $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
-        $modoLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
-        $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
-        $modoLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
-        $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
-        $modoLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
-        $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
         $testEmails = [];
         if (! $productionMode) {
             $raw = $tenant?->test_notification_emails;
@@ -734,14 +731,86 @@ class ActivationController extends Controller
         }
 
         $mode = $this->resolveNotificationMode();
+        $warnings = [];
+        $mailerName = (string) config('mail.default', 'log');
+        $smtpConfigured = $mailerName === 'smtp'
+            && trim((string) config('mail.mailers.smtp.host', '')) !== ''
+            && trim((string) config('mail.mailers.smtp.username', '')) !== '';
+        if ($productionMode && ! $smtpConfigured) {
+            $warnings[] = 'Configuración recomendada: usar SMTP autenticado (MAIL_MAILER=smtp + credenciales) para mejorar entrega y evitar rate limit.';
+            Log::warning('Activation email notifications are not using authenticated SMTP', [
+                'tenant_id' => $tenantId,
+                'activation_id' => $activationId,
+                'mailer' => $mailerName,
+                'smtp_host' => (string) config('mail.mailers.smtp.host', ''),
+                'smtp_username_set' => trim((string) config('mail.mailers.smtp.username', '')) !== '',
+            ]);
+        }
+        $emailsPerMinute = max(1, (int) env('MAIL_NOTIFICATIONS_PER_MINUTE', 12));
+        $mailThrottleKey = 'mail_notify_rate:'.$tenantId.':'.$mailerName;
+        $debugEvents = [];
+        $appendDebugEvent = static function (array $event) use (&$debugEvents): void {
+            if (count($debugEvents) >= 300) {
+                return;
+            }
+            $debugEvents[] = $event;
+        };
+        $appendDebugEvent([
+            'stage' => 'notification_start',
+            'ts' => now()->toDateTimeString(),
+            'tenant_id' => $tenantId,
+            'activation_id' => $activationId,
+            'production_mode' => $productionMode,
+            'mailer' => $mailerName,
+            'smtp_configured' => $smtpConfigured,
+            'mode' => $mode,
+            'emails_per_minute' => $emailsPerMinute,
+            'target_filter_count' => count($targetEmails),
+            'resolved_people_count' => count($people),
+        ]);
+        $throttleBeforeSend = static function () use ($mailThrottleKey, $emailsPerMinute): array {
+            $safeCounter = 0;
+            $waitedSeconds = 0;
+            try {
+                while (RateLimiter::tooManyAttempts($mailThrottleKey, $emailsPerMinute) && $safeCounter < 20) {
+                    $waitSeconds = max(1, RateLimiter::availableIn($mailThrottleKey));
+                    usleep($waitSeconds * 1000 * 1000);
+                    $waitedSeconds += $waitSeconds;
+                    $safeCounter++;
+                }
+                RateLimiter::hit($mailThrottleKey, 60);
+            } catch (\Throwable $rateLimiterError) {
+                return [
+                    'waited_seconds' => $waitedSeconds,
+                    'wait_cycles' => $safeCounter,
+                    'key' => $mailThrottleKey,
+                    'error' => trim((string) $rateLimiterError->getMessage()),
+                ];
+            }
+
+            return [
+                'waited_seconds' => $waitedSeconds,
+                'wait_cycles' => $safeCounter,
+                'key' => $mailThrottleKey,
+                'error' => '',
+            ];
+        };
         $ts = now()->format('Ymd_His');
         $sent = 0;
         $filesWritten = 0;
         $whatsappSent = 0;
         $whatsappFilesWritten = 0;
-        $warnings = [];
         $sentRecipients = [];
         $failedRecipients = [];
+        if (empty($people)) {
+            $warnings[] = 'No se resolvieron destinatarios para esta activación.';
+            $appendDebugEvent([
+                'stage' => 'no_recipients_resolved',
+                'ts' => now()->toDateTimeString(),
+                'target_filter_count' => count($targetEmails),
+                'production_mode' => $productionMode,
+            ]);
+        }
 
         if ($mode === 'file') {
             $dir = 'notifications_outbox/'.$tenantId.'/'.$activationId;
@@ -889,6 +958,54 @@ class ActivationController extends Controller
 
             return $accionesByTipo;
         };
+        $maxEmailAttempts = 4;
+        $emailDelayMs = 250;
+        $batchSize = 3;
+        $batchDelayMs = 1500;
+        $rateLimitBaseDelayMs = 1200;
+        $isTransientSmtpError = static function (string $error): bool {
+            $msg = strtolower(trim($error));
+            if ($msg === '') {
+                return false;
+            }
+
+            return str_contains($msg, '451')
+                || str_contains($msg, '421')
+                || str_contains($msg, '4.7.1')
+                || str_contains($msg, '4.4.2')
+                || str_contains($msg, 'ratelimit')
+                || str_contains($msg, 'rate limit')
+                || str_contains($msg, 'timeout')
+                || str_contains($msg, 'timed out')
+                || str_contains($msg, 'temporarily')
+                || str_contains($msg, 'try again later')
+                || str_contains($msg, 'too many');
+        };
+        $sendEmailWithRetry = static function (callable $sender) use ($isTransientSmtpError, $maxEmailAttempts, $rateLimitBaseDelayMs): array {
+            $attempt = 0;
+            $lastError = '';
+            $transientError = false;
+            while ($attempt < $maxEmailAttempts) {
+                $attempt++;
+                try {
+                    $sender();
+
+                    return ['sent' => true, 'error' => '', 'attempts' => $attempt, 'transient_error' => false];
+                } catch (\Throwable $mailErrorEx) {
+                    $lastError = trim((string) $mailErrorEx->getMessage());
+                    $isTransient = $isTransientSmtpError($lastError);
+                    $transientError = $transientError || $isTransient;
+                    if (! $isTransient || $attempt >= $maxEmailAttempts) {
+                        break;
+                    }
+                    $delayMs = $rateLimitBaseDelayMs * (2 ** ($attempt - 1));
+                    usleep($delayMs * 1000);
+                }
+            }
+
+            return ['sent' => false, 'error' => $lastError, 'attempts' => $attempt, 'transient_error' => $transientError];
+        };
+        $mailAttemptCounter = 0;
 
         if ($productionMode) {
             foreach ($people as $p) {
@@ -945,19 +1062,55 @@ class ActivationController extends Controller
                     $filesWritten++;
                 } else {
                     if ($to !== '') {
-                        try {
+                        $throttleInfo = $throttleBeforeSend();
+                        $throttleError = trim((string) ($throttleInfo['error'] ?? ''));
+                        if ($throttleError !== '') {
+                            $warnings[] = 'Rate limiter no disponible, se continúa sin control de tasa: '.$throttleError;
+                        }
+                        $mailResult = $sendEmailWithRetry(static function () use ($bodyHtml, $to, $subject): void {
                             Mail::html($bodyHtml, static function ($m) use ($to, $subject) {
                                 $m->to($to)->subject($subject);
                             });
+                        });
+                        if (($mailResult['sent'] ?? false) === true) {
                             $sent++;
                             $emailSent = true;
                             $sentRecipients[] = $to;
-                        } catch (\Throwable $mailErrorEx) {
+                        } else {
                             $emailSent = false;
-                            $emailError = trim((string) $mailErrorEx->getMessage());
+                            $emailError = trim((string) ($mailResult['error'] ?? ''));
+                            $attempts = (int) ($mailResult['attempts'] ?? 1);
+                            if (($mailResult['transient_error'] ?? false) === true) {
+                                $warnings[] = 'Se agotaron reintentos por error SMTP transitorio para '.$to.' (intentos: '.$attempts.').';
+                            }
                         }
+                        $appendDebugEvent([
+                            'stage' => 'send_person_email',
+                            'ts' => now()->toDateTimeString(),
+                            'per_id' => (string) ($p['per_id'] ?? ''),
+                            'email' => $to,
+                            'sent' => $emailSent,
+                            'attempts' => (int) ($mailResult['attempts'] ?? 0),
+                            'transient_error' => (bool) ($mailResult['transient_error'] ?? false),
+                            'error' => $emailError,
+                            'throttle_waited_seconds' => (int) ($throttleInfo['waited_seconds'] ?? 0),
+                            'throttle_wait_cycles' => (int) ($throttleInfo['wait_cycles'] ?? 0),
+                        ]);
                     } else {
                         $emailError = 'email destinatario no válido o ausente';
+                        $appendDebugEvent([
+                            'stage' => 'skip_person_email_invalid',
+                            'ts' => now()->toDateTimeString(),
+                            'per_id' => (string) ($p['per_id'] ?? ''),
+                            'email' => $rawTo !== '' ? strtolower($rawTo) : null,
+                            'reason' => $emailError,
+                        ]);
+                    }
+                    $mailAttemptCounter++;
+                    if ($mailAttemptCounter % $batchSize === 0) {
+                        usleep($batchDelayMs * 1000);
+                    } else {
+                        usleep($emailDelayMs * 1000);
                     }
                 }
                 if ($mode !== 'file' && ! $emailSent) {
@@ -1042,20 +1195,48 @@ class ActivationController extends Controller
                     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
                     $filesWritten++;
                 } else {
-                    try {
+                    $throttleInfo = $throttleBeforeSend();
+                    $throttleError = trim((string) ($throttleInfo['error'] ?? ''));
+                    if ($throttleError !== '') {
+                        $warnings[] = 'Rate limiter no disponible, se continúa sin control de tasa: '.$throttleError;
+                    }
+                    $mailResult = $sendEmailWithRetry(static function () use ($bodyHtml, $testEmail, $subject): void {
                         Mail::html($bodyHtml, static function ($m) use ($testEmail, $subject) {
                             $m->to($testEmail)->subject($subject);
                         });
+                    });
+                    if (($mailResult['sent'] ?? false) === true) {
                         $sent++;
                         $sentRecipients[] = $testEmail;
-                    } catch (\Throwable $mailErrorEx) {
-                        $error = trim((string) $mailErrorEx->getMessage());
+                    } else {
+                        $error = trim((string) ($mailResult['error'] ?? ''));
+                        $attempts = (int) ($mailResult['attempts'] ?? 1);
                         $warnings[] = 'No se pudo enviar email de prueba a '.$testEmail.': '.$error;
+                        if (($mailResult['transient_error'] ?? false) === true) {
+                            $warnings[] = 'Se agotaron reintentos por error SMTP transitorio para email de prueba '.$testEmail.' (intentos: '.$attempts.').';
+                        }
                         $failedRecipients[] = [
                             'per_id' => null,
                             'email' => $testEmail,
                             'reason' => $error !== '' ? $error : 'email de prueba no enviado',
                         ];
+                    }
+                    $appendDebugEvent([
+                        'stage' => 'send_test_email',
+                        'ts' => now()->toDateTimeString(),
+                        'email' => $testEmail,
+                        'sent' => (bool) ($mailResult['sent'] ?? false),
+                        'attempts' => (int) ($mailResult['attempts'] ?? 0),
+                        'transient_error' => (bool) ($mailResult['transient_error'] ?? false),
+                        'error' => trim((string) ($mailResult['error'] ?? '')),
+                        'throttle_waited_seconds' => (int) ($throttleInfo['waited_seconds'] ?? 0),
+                        'throttle_wait_cycles' => (int) ($throttleInfo['wait_cycles'] ?? 0),
+                    ]);
+                    $mailAttemptCounter++;
+                    if ($mailAttemptCounter % $batchSize === 0) {
+                        usleep($batchDelayMs * 1000);
+                    } else {
+                        usleep($emailDelayMs * 1000);
                     }
                 }
 
@@ -1120,7 +1301,42 @@ class ActivationController extends Controller
             'email_subject' => $emailSubject,
             'email_body' => $emailBody,
             'warnings' => $warnings,
+            'debug' => [
+                'production_mode' => $productionMode,
+                'mailer' => $mailerName,
+                'smtp_configured' => $smtpConfigured,
+                'emails_per_minute' => $emailsPerMinute,
+                'target_filter_count' => count($targetEmails),
+                'resolved_people_count' => count($people),
+                'mail_attempt_counter' => $mailAttemptCounter,
+                'events' => $debugEvents,
+            ],
         ]);
+        } catch (\Throwable $e) {
+            Log::error('sendNotifications failed', [
+                'tenant_id' => $tenantId,
+                'activation_id' => $activationId,
+                'accion_detalle_id' => $accionDetalleId,
+                'recipient_emails' => $targetEmails,
+                'exception' => $e->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => 'ERROR',
+                'mode' => 'mail',
+                'sent' => 0,
+                'files_written' => 0,
+                'recipients' => 0,
+                'failed_recipients' => [],
+                'warnings' => [],
+                'debug' => [
+                    'exception_class' => get_class($e),
+                    'exception_message' => trim((string) $e->getMessage()),
+                    'exception_file' => $e->getFile(),
+                    'exception_line' => $e->getLine(),
+                ],
+            ], 500);
+        }
     }
 
     public function sendNormalidadNotifications(Request $request): JsonResponse
