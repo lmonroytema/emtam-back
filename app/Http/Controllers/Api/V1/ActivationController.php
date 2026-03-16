@@ -495,8 +495,14 @@ class ActivationController extends Controller
 
         $validated = $request->validate([
             'accion_detalle_id' => ['nullable', 'string'],
+            'recipient_emails' => ['nullable', 'array'],
+            'recipient_emails.*' => ['nullable', 'string'],
         ]);
         $accionDetalleId = trim((string) ($validated['accion_detalle_id'] ?? ''));
+        $targetEmails = array_values(array_unique(array_values(array_filter(array_map(
+            static fn ($e) => strtolower(trim((string) $e)),
+            is_array($validated['recipient_emails'] ?? null) ? $validated['recipient_emails'] : [],
+        ), static fn ($email) => $email !== ''))));
 
         if (
             ! Schema::hasTable('ejecucion_accion_trs')
@@ -670,6 +676,16 @@ class ActivationController extends Controller
         }
 
         $people = array_values($byPerson);
+        if (! empty($targetEmails)) {
+            $targetSet = array_flip($targetEmails);
+            $people = array_values(array_filter($people, static function ($p) use ($targetSet) {
+                $email = strtolower(trim((string) ($p['email'] ?? '')));
+                if ($email === '') {
+                    return false;
+                }
+                return isset($targetSet[$email]);
+            }));
+        }
 
         $modoLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
         $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
