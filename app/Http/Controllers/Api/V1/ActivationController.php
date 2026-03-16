@@ -521,6 +521,7 @@ class ActivationController extends Controller
                 'ej.ej_ac-estado as ejecucion_estado',
                 'asg.as_en_fu-per_id-fk as per_id',
                 'asg.as_en_fu-tipo_asignacion as tipo_asignacion',
+                'de.ac_se_de-rol_id-fk as rol_id',
                 'p.per-email as email',
                 'p.per-tel_mov as tel_mov',
                 'p.per-nombre as nombre',
@@ -532,7 +533,22 @@ class ActivationController extends Controller
                 'de.ac_se_de-id as accion_detalle_id',
             ]);
 
+        $tenant = Tenant::query()->firstOrCreate(
+            ['tenant_id' => $tenantId],
+            ['name' => $tenantId, 'default_language' => 'es'],
+        );
+        $productionMode = (bool) ($tenant?->notifications_production_mode ?? false);
+
         $byPerson = [];
+        $actionsByRole = [];
+        $appendAction = static function (array &$person, array $action): void {
+            $idx = trim((string) ($action['accion_detalle_id'] ?? '')).'|'.trim((string) ($action['ejecucion_id'] ?? ''));
+            if ($idx === '|') {
+                return;
+            }
+            $person['acciones_index'][$idx] = true;
+            $person['acciones'][] = $action;
+        };
         foreach ($rows as $r) {
             $perId = trim((string) ($r->per_id ?? ''));
             if ($perId === '') {
@@ -550,6 +566,7 @@ class ActivationController extends Controller
             if ($tipo !== 'TITULAR') {
                 $tipo = 'SUPLENTE';
             }
+            $rolId = trim((string) ($r->rol_id ?? ''));
 
             $byPerson[$perId] ??= [
                 'per_id' => $perId,
@@ -557,6 +574,7 @@ class ActivationController extends Controller
                 'tel_mov' => $telMov !== '' ? $telMov : null,
                 'nombre' => $nombre !== '' ? $nombre : $perId,
                 'acciones' => [],
+                'acciones_index' => [],
             ];
             if (($byPerson[$perId]['email'] ?? null) === null && $email !== '') {
                 $byPerson[$perId]['email'] = $email;
@@ -567,7 +585,7 @@ class ActivationController extends Controller
             if (($byPerson[$perId]['nombre'] ?? '') === $perId && $nombre !== '') {
                 $byPerson[$perId]['nombre'] = $nombre;
             }
-            $byPerson[$perId]['acciones'][] = [
+            $actionPayload = [
                 'ejecucion_id' => (string) ($r->ejecucion_id ?? ''),
                 'accion_detalle_id' => (string) ($r->accion_detalle_id ?? ''),
                 'accion_operativa_id' => (string) ($r->accion_operativa_id ?? ''),
@@ -577,15 +595,82 @@ class ActivationController extends Controller
                 'tipo_asignacion' => $tipo,
                 'estado' => (string) ($r->ejecucion_estado ?? ''),
             ];
+            $appendAction($byPerson[$perId], $actionPayload);
+            if ($rolId !== '') {
+                $actionsByRole[$rolId] ??= [];
+                $actionsByRole[$rolId][] = $actionPayload;
+            }
+        }
+
+        if ($productionMode && ! empty($actionsByRole) && Schema::hasTable('persona_rol_grupo_cfg') && Schema::hasTable('persona_mst')) {
+            $roleIds = array_keys($actionsByRole);
+            $roleRows = DB::table('persona_rol_grupo_cfg as prg')
+                ->join('persona_mst as p', 'p.per-id', '=', 'prg.pe_ro_gr-per_id-fk')
+                ->whereIn('prg.pe_ro_gr-rol_id-fk', $roleIds)
+                ->whereRaw("UPPER(COALESCE(`prg`.`pe_ro_gr-activo`, 'SI')) <> 'NO'")
+                ->whereNull('prg.pe_ro_gr-fech_fin')
+                ->get([
+                    'prg.pe_ro_gr-rol_id-fk as rol_id',
+                    'prg.pe_ro_gr-per_id-fk as per_id',
+                    'prg.pe_ro_gr-tipo_asignacion as tipo_asignacion',
+                    'p.per-email as email',
+                    'p.per-tel_mov as tel_mov',
+                    'p.per-nombre as nombre',
+                    'p.per-apellido_1 as apellido_1',
+                    'p.per-apellido_2 as apellido_2',
+                ]);
+            foreach ($roleRows as $rr) {
+                $rolId = trim((string) ($rr->rol_id ?? ''));
+                $perId = trim((string) ($rr->per_id ?? ''));
+                if ($rolId === '' || $perId === '') {
+                    continue;
+                }
+                $tipo = strtoupper(trim((string) ($rr->tipo_asignacion ?? 'SUPLENTE')));
+                if ($tipo === '') {
+                    $tipo = 'SUPLENTE';
+                }
+                if ($tipo !== 'TITULAR' && $tipo !== 'SUPLENTE') {
+                    continue;
+                }
+                $email = strtolower(trim((string) ($rr->email ?? '')));
+                $telMov = trim((string) ($rr->tel_mov ?? ''));
+                $nombre = trim(implode(' ', array_filter([
+                    (string) ($rr->nombre ?? ''),
+                    (string) ($rr->apellido_1 ?? ''),
+                    (string) ($rr->apellido_2 ?? ''),
+                ])));
+                $byPerson[$perId] ??= [
+                    'per_id' => $perId,
+                    'email' => $email !== '' ? $email : null,
+                    'tel_mov' => $telMov !== '' ? $telMov : null,
+                    'nombre' => $nombre !== '' ? $nombre : $perId,
+                    'acciones' => [],
+                    'acciones_index' => [],
+                ];
+                if (($byPerson[$perId]['email'] ?? null) === null && $email !== '') {
+                    $byPerson[$perId]['email'] = $email;
+                }
+                if (($byPerson[$perId]['tel_mov'] ?? null) === null && $telMov !== '') {
+                    $byPerson[$perId]['tel_mov'] = $telMov;
+                }
+                if (($byPerson[$perId]['nombre'] ?? '') === $perId && $nombre !== '') {
+                    $byPerson[$perId]['nombre'] = $nombre;
+                }
+                foreach (($actionsByRole[$rolId] ?? []) as $actionPayload) {
+                    $appendAction($byPerson[$perId], $actionPayload);
+                }
+            }
+        }
+
+        foreach ($byPerson as $perId => $person) {
+            if (isset($person['acciones_index'])) {
+                unset($person['acciones_index']);
+            }
+            $byPerson[$perId] = $person;
         }
 
         $people = array_values($byPerson);
 
-        $tenant = Tenant::query()->firstOrCreate(
-            ['tenant_id' => $tenantId],
-            ['name' => $tenantId, 'default_language' => 'es'],
-        );
-        $productionMode = (bool) ($tenant?->notifications_production_mode ?? false);
         $modoLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
         $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
         $modoLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
