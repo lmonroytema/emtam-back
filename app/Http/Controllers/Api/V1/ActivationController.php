@@ -769,7 +769,11 @@ class ActivationController extends Controller
                 'smtp_username_set' => trim((string) config('mail.mailers.smtp.username', '')) !== '',
             ]);
         }
-        $emailsPerMinute = max(1, (int) env('MAIL_NOTIFICATIONS_PER_MINUTE', 12));
+        $fastMailModeEnv = filter_var((string) env('MAIL_FAST_MODE', 'false'), FILTER_VALIDATE_BOOLEAN);
+        $fastMailMode = $fastMailModeEnv || ! $productionMode;
+        $emailsPerMinute = $fastMailMode
+            ? max(1, (int) env('MAIL_FAST_NOTIFICATIONS_PER_MINUTE', 1000))
+            : max(1, (int) env('MAIL_NOTIFICATIONS_PER_MINUTE', 12));
         $mailThrottleKey = 'mail_notify_rate:'.$tenantId.':'.$mailerName;
         $debugEvents = [];
         $appendDebugEvent = static function (array $event) use (&$debugEvents): void {
@@ -787,6 +791,7 @@ class ActivationController extends Controller
             'mailer' => $mailerName,
             'smtp_configured' => $smtpConfigured,
             'mode' => $mode,
+            'fast_mail_mode' => $fastMailMode,
             'emails_per_minute' => $emailsPerMinute,
             'target_filter_count' => count($targetEmails),
             'resolved_people_count' => count($people),
@@ -981,14 +986,14 @@ class ActivationController extends Controller
 
             return $accionesByTipo;
         };
-        $maxEmailAttempts = 4;
-        $emailDelayMs = 250;
-        $batchSize = 3;
-        $batchDelayMs = 1500;
-        $rateLimitBaseDelayMs = 1200;
-        $transientRetryDelayMs = max(1000, (int) env('MAIL_TRANSIENT_RETRY_DELAY_MS', 15000));
-        $rateLimitRetryDelayMs = max(1000, (int) env('MAIL_RATELIMIT_RETRY_DELAY_MS', 65000));
-        $cooldownAfterTransientFailureMs = max(0, (int) env('MAIL_COOLDOWN_AFTER_TRANSIENT_FAILURE_MS', 45000));
+        $maxEmailAttempts = $fastMailMode ? 1 : 4;
+        $emailDelayMs = $fastMailMode ? 0 : 250;
+        $batchSize = $fastMailMode ? 999999 : 3;
+        $batchDelayMs = $fastMailMode ? 0 : 1500;
+        $rateLimitBaseDelayMs = $fastMailMode ? 0 : 1200;
+        $transientRetryDelayMs = $fastMailMode ? 0 : max(1000, (int) env('MAIL_TRANSIENT_RETRY_DELAY_MS', 15000));
+        $rateLimitRetryDelayMs = $fastMailMode ? 0 : max(1000, (int) env('MAIL_RATELIMIT_RETRY_DELAY_MS', 65000));
+        $cooldownAfterTransientFailureMs = $fastMailMode ? 0 : max(0, (int) env('MAIL_COOLDOWN_AFTER_TRANSIENT_FAILURE_MS', 45000));
         $isTransientSmtpError = static function (string $error): bool {
             $msg = strtolower(trim($error));
             if ($msg === '') {
@@ -1356,6 +1361,7 @@ class ActivationController extends Controller
                 'production_mode' => $productionMode,
                 'mailer' => $mailerName,
                 'smtp_configured' => $smtpConfigured,
+                'fast_mail_mode' => $fastMailMode,
                 'emails_per_minute' => $emailsPerMinute,
                 'transient_retry_delay_ms' => $transientRetryDelayMs,
                 'ratelimit_retry_delay_ms' => $rateLimitRetryDelayMs,
