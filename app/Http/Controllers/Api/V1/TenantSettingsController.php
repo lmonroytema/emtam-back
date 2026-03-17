@@ -53,6 +53,7 @@ class TenantSettingsController extends Controller
                 'brand_color' => $tenant->brand_color,
                 'theme' => $tenant->theme,
                 'notifications_production_mode' => (bool) ($tenant->notifications_production_mode ?? false),
+                'notifications_email_enabled' => (bool) ($tenant->notifications_email_enabled ?? false),
                 'test_notification_emails' => is_array($tenant->test_notification_emails) ? array_values($tenant->test_notification_emails) : [],
                 'test_notification_whatsapp_numbers' => is_array($tenant->test_notification_whatsapp_numbers) ? array_values($tenant->test_notification_whatsapp_numbers) : [],
                 'notifications_message_real' => $tenant->notifications_message_real,
@@ -173,6 +174,9 @@ class TenantSettingsController extends Controller
             'notifications_production_mode' => array_key_exists('notifications_production_mode', $data)
                 ? (bool) $data['notifications_production_mode']
                 : (bool) ($tenant->notifications_production_mode ?? false),
+            'notifications_email_enabled' => array_key_exists('notifications_email_enabled', $data)
+                ? (bool) $data['notifications_email_enabled']
+                : (bool) ($tenant->notifications_email_enabled ?? false),
             'test_notification_emails' => $testEmails !== null ? $testEmails : (is_array($tenant->test_notification_emails) ? array_values($tenant->test_notification_emails) : []),
             'test_notification_whatsapp_numbers' => $testWhatsappNumbers !== null ? $testWhatsappNumbers : (is_array($tenant->test_notification_whatsapp_numbers) ? array_values($tenant->test_notification_whatsapp_numbers) : []),
             'notifications_message_real' => array_key_exists('notifications_message_real', $data)
@@ -256,6 +260,7 @@ class TenantSettingsController extends Controller
                 'brand_color' => $tenant->brand_color,
                 'theme' => $tenant->theme,
                 'notifications_production_mode' => (bool) ($tenant->notifications_production_mode ?? false),
+                'notifications_email_enabled' => (bool) ($tenant->notifications_email_enabled ?? false),
                 'test_notification_emails' => is_array($tenant->test_notification_emails) ? array_values($tenant->test_notification_emails) : [],
                 'test_notification_whatsapp_numbers' => is_array($tenant->test_notification_whatsapp_numbers) ? array_values($tenant->test_notification_whatsapp_numbers) : [],
                 'notifications_message_real' => $tenant->notifications_message_real,

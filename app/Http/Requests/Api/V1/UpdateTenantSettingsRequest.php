@@ -17,6 +17,7 @@ class UpdateTenantSettingsRequest extends FormRequest
             'brand_color' => ['sometimes', 'nullable', 'string', 'max:32'],
             'theme' => ['sometimes', 'nullable', 'array'],
             'notifications_production_mode' => ['sometimes', 'boolean'],
+            'notifications_email_enabled' => ['sometimes', 'boolean'],
             'test_notification_emails' => ['sometimes', 'nullable', 'array'],
             'test_notification_emails.*' => ['required', 'email'],
             'test_notification_whatsapp_numbers' => ['sometimes', 'nullable', 'array'],

@@ -549,6 +549,7 @@ class ActivationController extends Controller
             ['name' => $tenantId, 'default_language' => 'es'],
         );
         $productionMode = (bool) ($tenant?->notifications_production_mode ?? false);
+        $emailNotificationsEnabled = (bool) ($tenant?->notifications_email_enabled ?? false);
 
         $byPerson = [];
         $actionsByRole = [];
@@ -707,6 +708,7 @@ class ActivationController extends Controller
                 'warnings' => [],
                 'debug' => [
                     'resolve_only' => true,
+                    'email_notifications_enabled' => $emailNotificationsEnabled,
                     'target_filter_count' => count($targetEmails),
                     'resolved_people_count' => count($people),
                 ],
@@ -790,6 +792,7 @@ class ActivationController extends Controller
             'production_mode' => $productionMode,
             'mailer' => $mailerName,
             'smtp_configured' => $smtpConfigured,
+            'email_notifications_enabled' => $emailNotificationsEnabled,
             'mode' => $mode,
             'fast_mail_mode' => $fastMailMode,
             'emails_per_minute' => $emailsPerMinute,
@@ -837,6 +840,15 @@ class ActivationController extends Controller
                 'ts' => now()->toDateTimeString(),
                 'target_filter_count' => count($targetEmails),
                 'production_mode' => $productionMode,
+            ]);
+        }
+        if ($mode !== 'file' && ! $emailNotificationsEnabled) {
+            $warnings[] = 'Envío de correos desactivado en configuración del tenant.';
+            $appendDebugEvent([
+                'stage' => 'email_notifications_disabled',
+                'ts' => now()->toDateTimeString(),
+                'tenant_id' => $tenantId,
+                'activation_id' => $activationId,
             ]);
         }
 
@@ -1108,6 +1120,14 @@ class ActivationController extends Controller
                     $filesWritten++;
                 } else {
                     if ($to !== '') {
+                        if (! $emailNotificationsEnabled) {
+                            $appendDebugEvent([
+                                'stage' => 'skip_person_email_disabled',
+                                'ts' => now()->toDateTimeString(),
+                                'per_id' => (string) ($p['per_id'] ?? ''),
+                                'email' => $to,
+                            ]);
+                        } else {
                         $throttleInfo = $throttleBeforeSend();
                         $throttleError = trim((string) ($throttleInfo['error'] ?? ''));
                         if ($throttleError !== '') {
@@ -1147,6 +1167,7 @@ class ActivationController extends Controller
                         if (($mailResult['sent'] ?? false) !== true && ($mailResult['transient_error'] ?? false) === true && $cooldownAfterTransientFailureMs > 0) {
                             usleep($cooldownAfterTransientFailureMs * 1000);
                         }
+                        }
                     } else {
                         $emailError = 'email destinatario no válido o ausente';
                         $appendDebugEvent([
@@ -1164,7 +1185,7 @@ class ActivationController extends Controller
                         usleep($emailDelayMs * 1000);
                     }
                 }
-                if ($mode !== 'file' && ! $emailSent) {
+                if ($mode !== 'file' && $emailNotificationsEnabled && ! $emailSent) {
                     $failedRecipients[] = [
                         'per_id' => (string) ($p['per_id'] ?? ''),
                         'email' => $to !== '' ? $to : null,
@@ -1189,7 +1210,7 @@ class ActivationController extends Controller
                     if ($mode !== 'file' && ! $emailSent) {
                         $extra = $emailError !== ''
                             ? '[email no enviado: '.$emailError.']'
-                            : '[email destinatario no válido o ausente]';
+                            : (! $emailNotificationsEnabled ? '[envío de correos desactivado en tenant]' : '[email destinatario no válido o ausente]');
                         $insert['no_en-mensaje'] = trim(($insert['no_en-mensaje'] ?? '').' '.$extra);
                     }
                     if (Schema::hasColumn('notificacion_envio_trs', 'no_en-modo')) {
@@ -1246,6 +1267,13 @@ class ActivationController extends Controller
                     ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
                     $filesWritten++;
                 } else {
+                    if (! $emailNotificationsEnabled) {
+                        $appendDebugEvent([
+                            'stage' => 'skip_test_email_disabled',
+                            'ts' => now()->toDateTimeString(),
+                            'email' => $testEmail,
+                        ]);
+                    } else {
                     $throttleInfo = $throttleBeforeSend();
                     $throttleError = trim((string) ($throttleInfo['error'] ?? ''));
                     if ($throttleError !== '') {
@@ -1293,6 +1321,7 @@ class ActivationController extends Controller
                         usleep($batchDelayMs * 1000);
                     } else {
                         usleep($emailDelayMs * 1000);
+                    }
                     }
                 }
 
@@ -1361,6 +1390,7 @@ class ActivationController extends Controller
                 'production_mode' => $productionMode,
                 'mailer' => $mailerName,
                 'smtp_configured' => $smtpConfigured,
+                'email_notifications_enabled' => $emailNotificationsEnabled,
                 'fast_mail_mode' => $fastMailMode,
                 'emails_per_minute' => $emailsPerMinute,
                 'transient_retry_delay_ms' => $transientRetryDelayMs,
@@ -1424,6 +1454,7 @@ class ActivationController extends Controller
             ['name' => $tenantId, 'default_language' => 'es'],
         );
         $productionMode = (bool) ($tenant?->notifications_production_mode ?? false);
+        $emailNotificationsEnabled = (bool) ($tenant?->notifications_email_enabled ?? false);
         $modeLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
         $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
 
@@ -1576,6 +1607,9 @@ class ActivationController extends Controller
                 $filesWritten++;
                 continue;
             }
+            if (! $emailNotificationsEnabled) {
+                continue;
+            }
 
             Mail::html($bodyHtml, static function ($m) use ($email, $subject) {
                 $m->to($email)->subject($subject);
@@ -1591,6 +1625,7 @@ class ActivationController extends Controller
             'recipients' => count($recipients),
             'email_subject' => $subject,
             'email_body' => strip_tags($bodyHtml),
+            'warnings' => ! $emailNotificationsEnabled ? ['Envío de correos desactivado en configuración del tenant.'] : [],
         ]);
     }
 
@@ -1633,6 +1668,7 @@ class ActivationController extends Controller
             ['name' => $tenantId, 'default_language' => 'es'],
         );
         $productionMode = (bool) ($tenant?->notifications_production_mode ?? false);
+        $emailNotificationsEnabled = (bool) ($tenant?->notifications_email_enabled ?? false);
         $modeLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
         $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
         $simPrefix = $isSimulacro ? '[SIMULACRO] ' : '';
@@ -1791,6 +1827,9 @@ class ActivationController extends Controller
                 $filesWritten++;
                 continue;
             }
+            if (! $emailNotificationsEnabled) {
+                continue;
+            }
 
             Mail::html($bodyHtml, static function ($m) use ($email, $subject) {
                 $m->to($email)->subject($subject);
@@ -1806,6 +1845,7 @@ class ActivationController extends Controller
             'recipients' => count($recipients),
             'email_subject' => $subject,
             'email_body' => strip_tags($bodyHtml),
+            'warnings' => ! $emailNotificationsEnabled ? ['Envío de correos desactivado en configuración del tenant.'] : [],
         ]);
     }
 
@@ -1916,6 +1956,7 @@ class ActivationController extends Controller
 
         $tenant = Tenant::query()->where('tenant_id', $tenantId)->first();
         $productionMode = (bool) ($tenant?->notifications_production_mode ?? false);
+        $emailNotificationsEnabled = (bool) ($tenant?->notifications_email_enabled ?? false);
         $modoLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
         $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
         $testEmails = [];
@@ -2022,7 +2063,9 @@ class ActivationController extends Controller
                 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
                 $filesWritten++;
             } else {
-                if ($productionMode) {
+                if (! $emailNotificationsEnabled) {
+                    $emailSent = false;
+                } elseif ($productionMode) {
                     if ($to !== '') {
                         try {
                             Mail::raw($body, static function ($m) use ($to, $subject) {
@@ -2060,7 +2103,7 @@ class ActivationController extends Controller
                 if ($mode !== 'file' && ! $emailSent) {
                     $extra = $emailError !== ''
                         ? '[email no enviado: '.$emailError.']'
-                        : '[email destinatario no válido o ausente]';
+                        : (! $emailNotificationsEnabled ? '[envío de correos desactivado en tenant]' : '[email destinatario no válido o ausente]');
                     $insert['no_en-mensaje'] = trim(($insert['no_en-mensaje'] ?? '').' '.$extra);
                 }
                 if (Schema::hasColumn('notificacion_envio_trs', 'no_en-modo')) {

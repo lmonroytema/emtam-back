@@ -27,6 +27,7 @@ class Tenant extends Model
         'gps_min_lng',
         'gps_max_lng',
         'notifications_production_mode',
+        'notifications_email_enabled',
         'test_notification_emails',
         'test_notification_whatsapp_numbers',
         'notifications_message_real',
@@ -43,6 +44,7 @@ class Tenant extends Model
         return [
             'theme' => 'array',
             'notifications_production_mode' => 'boolean',
+            'notifications_email_enabled' => 'boolean',
             'test_notification_emails' => 'array',
             'test_notification_whatsapp_numbers' => 'array',
             'notifications_include_credentials' => 'boolean',
