@@ -222,10 +222,6 @@ class ActivationController extends Controller
 
             $actionSetIds = $this->getActionSets($tenantId, $data['rie_id'], $data['ni_al_id']);
 
-            if ($scenario !== 'PREALERTA' && ! empty($actionSetIds)) {
-                $actionSetIds = [array_values($actionSetIds)[0]];
-            }
-
             $actionSetIds = array_values(array_unique(array_filter($actionSetIds, static fn ($v) => is_string($v) && trim($v) !== '')));
             if ($scenario === 'ACTIVACION' && empty($actionSetIds)) {
                 $warnings[] = 'No se encontraron acciones operativas configuradas para este riesgo y nivel de alerta.';
@@ -1849,6 +1845,136 @@ class ActivationController extends Controller
         ]);
     }
 
+    public function sendTitularChangeNotification(Request $request, string $activationId): JsonResponse
+    {
+        $tenantId = $this->tenantContext->tenantId();
+        if ($tenantId === null) {
+            return response()->json(['message' => __('messages.tenant.missing')], 422);
+        }
+
+        $activationId = trim($activationId);
+        if ($activationId === '') {
+            return response()->json(['message' => 'Invalid activation id.'], 422);
+        }
+
+        $validated = $request->validate([
+            'grupo_id' => ['required', 'string'],
+            'per_id' => ['required', 'string'],
+        ]);
+        $grupoId = trim((string) ($validated['grupo_id'] ?? ''));
+        $perId = trim((string) ($validated['per_id'] ?? ''));
+        if ($grupoId === '' || $perId === '') {
+            return response()->json(['message' => 'Invalid payload.'], 422);
+        }
+
+        $tenant = Tenant::query()->firstOrCreate(
+            ['tenant_id' => $tenantId],
+            ['name' => $tenantId, 'default_language' => 'es'],
+        );
+        $productionMode = (bool) ($tenant?->notifications_production_mode ?? false);
+        $emailNotificationsEnabled = (bool) ($tenant?->notifications_email_enabled ?? false);
+        $mode = $this->resolveNotificationMode();
+
+        $groupName = '';
+        if (Schema::hasTable('grupo_operativo_cat')) {
+            $groupName = trim((string) DB::table('grupo_operativo_cat')
+                ->when(
+                    Schema::hasColumn('grupo_operativo_cat', 'gr_op-tenant_id'),
+                    static fn ($q) => $q->where('gr_op-tenant_id', $tenantId),
+                )
+                ->where('gr_op-id', $grupoId)
+                ->value('gr_op-nombre'));
+        }
+
+        $personEmail = '';
+        $personLabel = '';
+        if (Schema::hasTable('persona_mst')) {
+            $person = DB::table('persona_mst as p')
+                ->when(
+                    Schema::hasColumn('persona_mst', 'per-tenant_id'),
+                    static fn ($q) => $q->where('p.per-tenant_id', $tenantId),
+                )
+                ->where('p.per-id', $perId)
+                ->first([
+                    'p.per-email as email',
+                    'p.per-nombre as nombre',
+                    'p.per-apellido_1 as apellido_1',
+                    'p.per-apellido_2 as apellido_2',
+                ]);
+            $personEmail = strtolower(trim((string) ($person->email ?? '')));
+            $personLabel = trim(implode(' ', array_filter([
+                (string) ($person->nombre ?? ''),
+                (string) ($person->apellido_1 ?? ''),
+                (string) ($person->apellido_2 ?? ''),
+            ])));
+        }
+
+        $recipients = [];
+        if ($productionMode) {
+            if ($personEmail !== '') {
+                $recipients[$personEmail] = $personLabel !== '' ? $personLabel : $personEmail;
+            }
+        } else {
+            $raw = $tenant?->test_notification_emails;
+            $values = [];
+            if (is_string($raw)) {
+                $values = preg_split('/[;,]+/', $raw) ?: [];
+            } elseif (is_array($raw)) {
+                $values = $raw;
+            }
+            foreach ($values as $value) {
+                $email = strtolower(trim((string) $value));
+                if ($email !== '') {
+                    $recipients[$email] = $email;
+                }
+            }
+        }
+
+        $subject = 'Cambio de titularidad'.($groupName !== '' ? ' — '.$groupName : '');
+        $text = "Se confirma que ahora eres titular del grupo operativo.\n"
+            .($personLabel !== '' ? "Nuevo titular: {$personLabel}\n" : '')
+            .($groupName !== '' ? "Grupo operativo: {$groupName}\n" : '')
+            ."Plan activado: {$activationId}\n"
+            .'Accede a la aplicación: https://emta.grupo-tema.com/';
+        $bodyHtml = $this->renderNotificationHtml($text);
+
+        $sent = 0;
+        $filesWritten = 0;
+        $ts = now()->format('YmdHis');
+        foreach ($recipients as $email => $displayName) {
+            if ($mode === 'file') {
+                $safe = preg_replace('/[^A-Za-z0-9._-]+/', '_', $email) ?: 'persona';
+                $path = 'notifications_outbox/'.$tenantId.'/titular/'.$activationId.'/'.$ts.'-'.$safe.'.html';
+                Storage::disk('local')->put($path, $bodyHtml);
+                $filesWritten++;
+                continue;
+            }
+            if (! $emailNotificationsEnabled) {
+                continue;
+            }
+            Mail::html($bodyHtml, static function ($m) use ($email, $subject): void {
+                $m->to($email)->subject($subject);
+            });
+            $sent++;
+        }
+
+        return response()->json([
+            'message' => 'OK',
+            'mode' => $mode,
+            'sent' => $sent,
+            'files_written' => $filesWritten,
+            'recipients' => count($recipients),
+            'recipient_emails' => array_keys($recipients),
+            'email_subject' => $subject,
+            'email_body' => strip_tags($bodyHtml),
+            'warnings' => ! $emailNotificationsEnabled ? ['Envío de correos desactivado en configuración del tenant.'] : [],
+            'debug' => [
+                'production_mode' => $productionMode,
+                'email_notifications_enabled' => $emailNotificationsEnabled,
+            ],
+        ]);
+    }
+
     private function resolveNotificationMode(): string
     {
         $forceFile = filter_var((string) env('NOTIFICATIONS_FORCE_FILE_MODE', 'false'), FILTER_VALIDATE_BOOL);
@@ -2710,10 +2836,6 @@ class ActivationController extends Controller
         $actionSetIds = [];
         if ($nivelAlertaIdResolved !== '') {
             $actionSetIds = $this->getActionSets($tenantId, $riesgoId, $nivelAlertaIdResolved);
-        }
-
-        if ($scenario !== 'PREALERTA' && ! empty($actionSetIds)) {
-            $actionSetIds = [array_values($actionSetIds)[0]];
         }
 
         $actionSetIds = array_values(array_unique(array_filter($actionSetIds, static fn ($v) => is_string($v) && trim($v) !== '')));
