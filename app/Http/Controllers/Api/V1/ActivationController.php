@@ -353,26 +353,84 @@ class ActivationController extends Controller
                             ->get();
                     }
 
+                    $rowsByGroup = [];
                     foreach ($personaRolGrupoByRol[$rolIdStr] as $dest) {
                         $perId = trim((string) ($dest->{'pe_ro_gr-per_id-fk'} ?? ''));
                         if ($perId === '') {
                             continue;
                         }
-
+                        $grOpIdStr = trim((string) ($dest->{'pe_ro_gr-gr_op_id-fk'} ?? ''));
                         $tipoAsign = strtoupper(trim((string) ($dest->{'pe_ro_gr-tipo_asignacion'} ?? '')));
-                        if ($tipoAsign !== '' && $tipoAsign !== 'TITULAR') {
+                        if ($tipoAsign === '') {
+                            $tipoAsign = 'TITULAR';
+                        }
+                        if (! in_array($tipoAsign, ['TITULAR', 'LIDER'], true)) {
                             continue;
                         }
-                        $tipoAsign = 'TITULAR';
-
-                        $grOpId = $dest->{'pe_ro_gr-gr_op_id-fk'} ?? null;
-                        $grOpIdStr = trim((string) ($grOpId ?? ''));
-
-                        $recipients[] = [
+                        $rowsByGroup[$grOpIdStr][] = [
                             'per_id' => $perId,
                             'gr_op_id' => $grOpIdStr !== '' ? $grOpIdStr : null,
                             'tipo_asignacion' => $tipoAsign,
+                            'order' => (int) trim((string) ($dest->{'pe_ro_gr-orden_sust'} ?? '999')),
+                            'row_id' => (string) ($dest->{'pe_ro_gr-id'} ?? ''),
                         ];
+                    }
+
+                    $groupIds = array_keys($rowsByGroup);
+                    $hasMultipleGroups = count($groupIds) > 1;
+                    $leaderCandidates = [];
+                    foreach ($rowsByGroup as $groupRows) {
+                        foreach ($groupRows as $row) {
+                            if (($row['tipo_asignacion'] ?? '') !== 'LIDER') {
+                                continue;
+                            }
+                            $leaderCandidates[] = $row;
+                        }
+                    }
+
+                    if ($hasMultipleGroups) {
+                        if (! empty($leaderCandidates)) {
+                            usort($leaderCandidates, static function ($a, $b) {
+                                $ao = (int) ($a['order'] ?? 999);
+                                $bo = (int) ($b['order'] ?? 999);
+                                if ($ao !== $bo) {
+                                    return $ao <=> $bo;
+                                }
+                                return strcmp((string) ($a['row_id'] ?? ''), (string) ($b['row_id'] ?? ''));
+                            });
+                            $selectedLeader = $leaderCandidates[0];
+                            $recipients[] = [
+                                'per_id' => (string) ($selectedLeader['per_id'] ?? ''),
+                                'gr_op_id' => $selectedLeader['gr_op_id'] ?? null,
+                                'tipo_asignacion' => 'TITULAR',
+                            ];
+                        } else {
+                            foreach ($rowsByGroup as $groupRows) {
+                                foreach ($groupRows as $row) {
+                                    if (($row['tipo_asignacion'] ?? '') !== 'TITULAR') {
+                                        continue;
+                                    }
+                                    $recipients[] = [
+                                        'per_id' => (string) ($row['per_id'] ?? ''),
+                                        'gr_op_id' => $row['gr_op_id'] ?? null,
+                                        'tipo_asignacion' => 'TITULAR',
+                                    ];
+                                }
+                            }
+                        }
+                    } else {
+                        foreach ($rowsByGroup as $groupRows) {
+                            foreach ($groupRows as $row) {
+                                if (($row['tipo_asignacion'] ?? '') !== 'TITULAR') {
+                                    continue;
+                                }
+                                $recipients[] = [
+                                    'per_id' => (string) ($row['per_id'] ?? ''),
+                                    'gr_op_id' => $row['gr_op_id'] ?? null,
+                                    'tipo_asignacion' => 'TITULAR',
+                                ];
+                            }
+                        }
                     }
                 }
 
@@ -636,6 +694,9 @@ class ActivationController extends Controller
                 $tipo = strtoupper(trim((string) ($rr->tipo_asignacion ?? 'SUPLENTE')));
                 if ($tipo === '') {
                     $tipo = 'SUPLENTE';
+                }
+                if ($tipo === 'LIDER') {
+                    $tipo = 'TITULAR';
                 }
                 if ($tipo !== 'TITULAR' && $tipo !== 'SUPLENTE') {
                     continue;
@@ -1517,7 +1578,7 @@ class ActivationController extends Controller
                         static fn ($q) => $q->where('p.per-tenant_id', $tenantId),
                     )
                     ->whereRaw("UPPER(COALESCE(`prg`.`pe_ro_gr-activo`, 'SI')) <> 'NO'")
-                    ->whereRaw("UPPER(COALESCE(`prg`.`pe_ro_gr-tipo_asignacion`, '')) = 'TITULAR'")
+                    ->whereRaw("UPPER(COALESCE(`prg`.`pe_ro_gr-tipo_asignacion`, '')) IN ('TITULAR','LIDER')")
                     ->when(
                         Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-fech_fin'),
                         static fn ($q) => $q->whereNull('prg.pe_ro_gr-fech_fin'),
@@ -1737,7 +1798,7 @@ class ActivationController extends Controller
                         static fn ($q) => $q->where('p.per-tenant_id', $tenantId),
                     )
                     ->whereRaw("UPPER(COALESCE(`prg`.`pe_ro_gr-activo`, 'SI')) <> 'NO'")
-                    ->whereRaw("UPPER(COALESCE(`prg`.`pe_ro_gr-tipo_asignacion`, 'SUPLENTE')) IN ('TITULAR','SUPLENTE')")
+                    ->whereRaw("UPPER(COALESCE(`prg`.`pe_ro_gr-tipo_asignacion`, 'SUPLENTE')) IN ('TITULAR','SUPLENTE','LIDER')")
                     ->when(
                         Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-fech_fin'),
                         static fn ($q) => $q->whereNull('prg.pe_ro_gr-fech_fin'),
@@ -3020,10 +3081,43 @@ class ActivationController extends Controller
                     $destinatariosByGrupo[$grId] ??= [];
                     $destinatariosByGrupo[$grId][] = $d;
                 }
-
+                $groupIds = array_keys($destinatariosByGrupo);
+                $hasMultipleGroups = count($groupIds) > 1;
+                $leaderCandidates = [];
                 foreach ($destinatariosByGrupo as $grId => $items) {
+                    foreach ($items as $d) {
+                        $tipo = strtoupper(trim((string) ($d->{'pe_ro_gr-tipo_asignacion'} ?? '')));
+                        if ($tipo !== 'LIDER') {
+                            continue;
+                        }
+                        $leaderCandidates[] = [
+                            'group_id' => $grId,
+                            'order' => (int) trim((string) ($d->{'pe_ro_gr-orden_sust'} ?? '999')),
+                            'row_id' => (string) ($d->{'pe_ro_gr-id'} ?? ''),
+                        ];
+                    }
+                }
+                $selectedLeaderGroupId = null;
+                if ($hasMultipleGroups && ! empty($leaderCandidates)) {
+                    usort($leaderCandidates, static function ($a, $b) {
+                        $ao = (int) ($a['order'] ?? 999);
+                        $bo = (int) ($b['order'] ?? 999);
+                        if ($ao !== $bo) {
+                            return $ao <=> $bo;
+                        }
+                        return strcmp((string) ($a['row_id'] ?? ''), (string) ($b['row_id'] ?? ''));
+                    });
+                    $selectedLeaderGroupId = (string) ($leaderCandidates[0]['group_id'] ?? '');
+                }
+                $groupsToProcess = $destinatariosByGrupo;
+                if ($hasMultipleGroups && $selectedLeaderGroupId !== null && array_key_exists($selectedLeaderGroupId, $destinatariosByGrupo)) {
+                    $groupsToProcess = [$selectedLeaderGroupId => $destinatariosByGrupo[$selectedLeaderGroupId]];
+                }
+
+                foreach ($groupsToProcess as $grId => $items) {
                     $titular = null;
                     $suplentes = [];
+                    $allowLeaderAsTitular = $hasMultipleGroups && $selectedLeaderGroupId !== null && $grId === $selectedLeaderGroupId;
 
                     usort($items, static function ($a, $b) {
                         $ao = (int) trim((string) ($a->{'pe_ro_gr-orden_sust'} ?? '999'));
@@ -3037,7 +3131,7 @@ class ActivationController extends Controller
 
                     foreach ($items as $d) {
                         $tipo = strtoupper(trim((string) ($d->{'pe_ro_gr-tipo_asignacion'} ?? '')));
-                        if ($tipo !== '' && $tipo !== 'TITULAR' && $tipo !== 'SUPLENTE') {
+                        if ($tipo !== '' && $tipo !== 'TITULAR' && $tipo !== 'SUPLENTE' && $tipo !== 'LIDER') {
                             continue;
                         }
 
@@ -3060,7 +3154,7 @@ class ActivationController extends Controller
                             'email' => $p->{'per-email'} ?? null,
                         ];
 
-                        if ($tipo === 'TITULAR' && $titular === null) {
+                        if (($tipo === 'TITULAR' || ($allowLeaderAsTitular && $tipo === 'LIDER')) && $titular === null) {
                             $titular = $personaData;
 
                             continue;
