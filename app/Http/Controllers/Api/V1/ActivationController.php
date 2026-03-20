@@ -1785,8 +1785,39 @@ class ActivationController extends Controller
         $scenarioLabel = $isPrealerta ? 'Prealerta' : ($isAviso ? 'Aviso' : 'Resumen');
 
         $recipients = [];
+        $recipientSource = 'none';
         if ($productionMode) {
-            if (Schema::hasTable('persona_rol_grupo_cfg') && Schema::hasTable('persona_mst')) {
+            if (Schema::hasTable('persona_mst') && $isAviso) {
+                $recipientSource = 'all_users';
+                $rows = DB::table('persona_mst as p')
+                    ->when(
+                        Schema::hasColumn('persona_mst', 'per-tenant_id'),
+                        static fn ($q) => $q->where('p.per-tenant_id', $tenantId),
+                    )
+                    ->when(
+                        Schema::hasColumn('persona_mst', 'per-activo'),
+                        static fn ($q) => $q->whereRaw("UPPER(COALESCE(`p`.`per-activo`, 'SI')) <> 'NO'"),
+                    )
+                    ->get([
+                        'p.per-email as email',
+                        'p.per-nombre as nombre',
+                        'p.per-apellido_1 as apellido_1',
+                        'p.per-apellido_2 as apellido_2',
+                    ]);
+
+                foreach ($rows as $row) {
+                    $email = strtolower(trim((string) ($row->email ?? '')));
+                    if ($email === '') {
+                        continue;
+                    }
+                    $recipients[$email] = trim(implode(' ', array_filter([
+                        (string) ($row->nombre ?? ''),
+                        (string) ($row->apellido_1 ?? ''),
+                        (string) ($row->apellido_2 ?? ''),
+                    ])));
+                }
+            } elseif (Schema::hasTable('persona_rol_grupo_cfg') && Schema::hasTable('persona_mst')) {
+                $recipientSource = 'roles_groups';
                 $rows = DB::table('persona_rol_grupo_cfg as prg')
                     ->join('persona_mst as p', 'p.per-id', '=', 'prg.pe_ro_gr-per_id-fk')
                     ->when(
@@ -1823,6 +1854,7 @@ class ActivationController extends Controller
                 }
             }
         } else {
+            $recipientSource = 'test_emails';
             $raw = $tenant?->test_notification_emails;
             if (! empty($raw)) {
                 if (is_string($raw)) {
@@ -1873,6 +1905,12 @@ class ActivationController extends Controller
                 'recipients' => 0,
                 'email_subject' => $subject,
                 'email_body' => strip_tags($bodyHtml),
+                'debug' => [
+                    'production_mode' => $productionMode,
+                    'email_notifications_enabled' => $emailNotificationsEnabled,
+                    'recipient_source' => $recipientSource,
+                    'is_aviso' => $isAviso,
+                ],
             ]);
         }
 
@@ -1903,6 +1941,12 @@ class ActivationController extends Controller
             'email_subject' => $subject,
             'email_body' => strip_tags($bodyHtml),
             'warnings' => ! $emailNotificationsEnabled ? ['Envío de correos desactivado en configuración del tenant.'] : [],
+            'debug' => [
+                'production_mode' => $productionMode,
+                'email_notifications_enabled' => $emailNotificationsEnabled,
+                'recipient_source' => $recipientSource,
+                'is_aviso' => $isAviso,
+            ],
         ]);
     }
 
