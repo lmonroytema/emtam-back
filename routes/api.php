@@ -75,9 +75,13 @@ Route::prefix('v1')->group(function () {
 
         Route::get('tenant/documents/folders/{folderId}/documents', [TenantDocumentController::class, 'listDocuments']);
         Route::post('tenant/documents/folders/{folderId}/documents', [TenantDocumentController::class, 'uploadDocuments']);
+        Route::get('tenant/documents/folders/{folderId}/links', [TenantDocumentController::class, 'listLinks']);
+        Route::post('tenant/documents/folders/{folderId}/links', [TenantDocumentController::class, 'createLink']);
         Route::put('tenant/documents/{documentId}', [TenantDocumentController::class, 'updateDocument']);
         Route::delete('tenant/documents/{documentId}', [TenantDocumentController::class, 'deleteDocument']);
         Route::get('tenant/documents/{documentId}/download', [TenantDocumentController::class, 'downloadDocument']);
+        Route::put('tenant/documents/links/{linkId}', [TenantDocumentController::class, 'updateLink']);
+        Route::delete('tenant/documents/links/{linkId}', [TenantDocumentController::class, 'deleteLink']);
 
         Route::get('audit', [AuditController::class, 'index']);
         Route::get('audit/filters', [AuditController::class, 'filters']);

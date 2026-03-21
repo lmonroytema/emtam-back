@@ -32,20 +32,54 @@ class TenantDocumentController extends Controller
             return response()->json(['message' => 'Missing tenant_document_folders table.'], 422);
         }
 
+        $hasLinksMode = Schema::hasColumn('tenant_document_folders', 'is_links_mode');
+        $select = [
+            'f.id',
+            'f.tenant_id',
+            'f.name',
+            'f.created_by_user_id',
+            'f.created_at',
+            'f.updated_at',
+            DB::raw('COUNT(d.id) as document_count'),
+        ];
+        if ($hasLinksMode) {
+            $select[] = 'f.is_links_mode';
+        }
+        $groupBy = ['f.id', 'f.tenant_id', 'f.name', 'f.created_by_user_id', 'f.created_at', 'f.updated_at'];
+        if ($hasLinksMode) {
+            $groupBy[] = 'f.is_links_mode';
+        }
+
         $folders = DB::table('tenant_document_folders as f')
             ->leftJoin('tenant_documents as d', 'd.folder_id', '=', 'f.id')
             ->where('f.tenant_id', $tenantId)
-            ->groupBy('f.id', 'f.tenant_id', 'f.name', 'f.created_by_user_id', 'f.created_at', 'f.updated_at')
+            ->groupBy(...$groupBy)
             ->orderBy('f.name')
-            ->get([
-                'f.id',
-                'f.tenant_id',
-                'f.name',
-                'f.created_by_user_id',
-                'f.created_at',
-                'f.updated_at',
-                DB::raw('COUNT(d.id) as document_count'),
-            ]);
+            ->get($select);
+
+        $linkCountByFolder = [];
+        if (Schema::hasTable('tenant_document_links')) {
+            $rows = DB::table('tenant_document_links')
+                ->select('folder_id', DB::raw('COUNT(*) as link_count'))
+                ->where('tenant_id', $tenantId)
+                ->groupBy('folder_id')
+                ->get();
+            foreach ($rows as $row) {
+                $folderId = (int) ($row->folder_id ?? 0);
+                if ($folderId <= 0) {
+                    continue;
+                }
+                $linkCountByFolder[$folderId] = (int) ($row->link_count ?? 0);
+            }
+        }
+
+        foreach ($folders as $folder) {
+            $folder->is_links_mode = (bool) ($folder->is_links_mode ?? false);
+            if ($folder->is_links_mode) {
+                $folderId = (int) ($folder->id ?? 0);
+                $folder->document_count = $linkCountByFolder[$folderId] ?? 0;
+            }
+        }
 
         return response()->json(['folders' => $folders]);
     }
@@ -59,19 +93,24 @@ class TenantDocumentController extends Controller
 
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
+            'is_links_mode' => ['sometimes', 'boolean'],
         ]);
 
         if (! Schema::hasTable('tenant_document_folders')) {
             return response()->json(['message' => 'Missing tenant_document_folders table.'], 422);
         }
 
-        $id = DB::table('tenant_document_folders')->insertGetId([
+        $insert = [
             'tenant_id' => $tenantId,
             'name' => trim((string) $data['name']),
             'created_by_user_id' => $request->user()?->id,
             'created_at' => now(),
             'updated_at' => now(),
-        ]);
+        ];
+        if (Schema::hasColumn('tenant_document_folders', 'is_links_mode')) {
+            $insert['is_links_mode'] = (bool) ($data['is_links_mode'] ?? false);
+        }
+        $id = DB::table('tenant_document_folders')->insertGetId($insert);
 
         $this->auditLogger->logFromRequest($request, [
             'event_type' => 'document_folder_created',
@@ -93,19 +132,25 @@ class TenantDocumentController extends Controller
 
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
+            'is_links_mode' => ['sometimes', 'boolean'],
         ]);
 
         if (! Schema::hasTable('tenant_document_folders')) {
             return response()->json(['message' => 'Missing tenant_document_folders table.'], 422);
         }
 
+        $update = [
+            'name' => trim((string) $data['name']),
+            'updated_at' => now(),
+        ];
+        if (Schema::hasColumn('tenant_document_folders', 'is_links_mode') && array_key_exists('is_links_mode', $data)) {
+            $update['is_links_mode'] = (bool) $data['is_links_mode'];
+        }
+
         $updated = DB::table('tenant_document_folders')
             ->where('id', $folderId)
             ->where('tenant_id', $tenantId)
-            ->update([
-                'name' => trim((string) $data['name']),
-                'updated_at' => now(),
-            ]);
+            ->update($update);
 
         if ($updated === 0) {
             return response()->json(['message' => 'Folder not found.'], 404);
@@ -154,11 +199,30 @@ class TenantDocumentController extends Controller
                     ->delete();
             }
         }
+        if (Schema::hasTable('tenant_document_link_riesgo_trs') && Schema::hasTable('tenant_document_links')) {
+            $linkIds = DB::table('tenant_document_links')
+                ->where('folder_id', $folderId)
+                ->where('tenant_id', $tenantId)
+                ->pluck('id')
+                ->all();
+            if (count($linkIds) > 0) {
+                DB::table('tenant_document_link_riesgo_trs')
+                    ->where('tenant_id', $tenantId)
+                    ->whereIn('link_id', $linkIds)
+                    ->delete();
+            }
+        }
 
         DB::table('tenant_documents')
             ->where('folder_id', $folderId)
             ->where('tenant_id', $tenantId)
             ->delete();
+        if (Schema::hasTable('tenant_document_links')) {
+            DB::table('tenant_document_links')
+                ->where('folder_id', $folderId)
+                ->where('tenant_id', $tenantId)
+                ->delete();
+        }
 
         $deleted = DB::table('tenant_document_folders')
             ->where('id', $folderId)
@@ -240,6 +304,227 @@ class TenantDocumentController extends Controller
         }
 
         return response()->json(['documents' => $docs]);
+    }
+
+    public function listLinks(Request $request, int $folderId): JsonResponse
+    {
+        $tenantId = $this->tenantContext->tenantId();
+        if ($tenantId === null) {
+            return response()->json(['message' => __('messages.tenant.missing')], 422);
+        }
+        if (! Schema::hasTable('tenant_document_links') || ! Schema::hasTable('tenant_document_folders')) {
+            return response()->json(['message' => 'Missing tenant document link tables.'], 422);
+        }
+
+        $exists = DB::table('tenant_document_folders')
+            ->where('id', $folderId)
+            ->where('tenant_id', $tenantId)
+            ->exists();
+        if (! $exists) {
+            return response()->json(['message' => 'Folder not found.'], 404);
+        }
+
+        $links = DB::table('tenant_document_links as l')
+            ->leftJoin('users as u', 'u.id', '=', 'l.created_by_user_id')
+            ->where('l.folder_id', $folderId)
+            ->where('l.tenant_id', $tenantId)
+            ->orderBy('l.created_at', 'desc')
+            ->get([
+                'l.id',
+                'l.folder_id',
+                'l.title',
+                'l.url',
+                'l.created_at',
+                'u.name as uploader_name',
+            ]);
+
+        $riskMap = [];
+        if (Schema::hasTable('tenant_document_link_riesgo_trs') && $links->count() > 0) {
+            $linkIds = $links->pluck('id')->all();
+            $rows = DB::table('tenant_document_link_riesgo_trs')
+                ->where('tenant_id', $tenantId)
+                ->whereIn('link_id', $linkIds)
+                ->get(['link_id', 'riesgo_id']);
+            foreach ($rows as $row) {
+                $linkId = (int) ($row->link_id ?? 0);
+                if (! $linkId) {
+                    continue;
+                }
+                $riskMap[$linkId] = $riskMap[$linkId] ?? [];
+                $riskMap[$linkId][] = (string) ($row->riesgo_id ?? '');
+            }
+        }
+
+        foreach ($links as $link) {
+            $linkId = (int) ($link->id ?? 0);
+            $link->risk_ids = $riskMap[$linkId] ?? [];
+        }
+
+        return response()->json(['links' => $links]);
+    }
+
+    public function createLink(Request $request, int $folderId): JsonResponse
+    {
+        $tenantId = $this->tenantContext->tenantId();
+        if ($tenantId === null) {
+            return response()->json(['message' => __('messages.tenant.missing')], 422);
+        }
+        if (! Schema::hasTable('tenant_document_links') || ! Schema::hasTable('tenant_document_folders')) {
+            return response()->json(['message' => 'Missing tenant document link tables.'], 422);
+        }
+
+        $exists = DB::table('tenant_document_folders')
+            ->where('id', $folderId)
+            ->where('tenant_id', $tenantId)
+            ->exists();
+        if (! $exists) {
+            return response()->json(['message' => 'Folder not found.'], 404);
+        }
+
+        $data = $request->validate([
+            'title' => ['required', 'string', 'max:255'],
+            'url' => ['required', 'string', 'max:2000'],
+            'risk_ids' => ['sometimes', 'array'],
+            'risk_ids.*' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $title = trim((string) $data['title']);
+        $url = trim((string) $data['url']);
+        if (! preg_match('/^https?:\/\//i', $url)) {
+            $url = 'https://'.$url;
+        }
+
+        $id = DB::table('tenant_document_links')->insertGetId([
+            'tenant_id' => $tenantId,
+            'folder_id' => $folderId,
+            'title' => $title,
+            'url' => $url,
+            'created_by_user_id' => $request->user()?->id,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        if (Schema::hasTable('tenant_document_link_riesgo_trs')) {
+            $riskList = $data['risk_ids'] ?? [];
+            if (! is_array($riskList)) {
+                $riskList = [$riskList];
+            }
+            $riskList = array_values(array_unique(array_filter(array_map('strval', $riskList), fn ($v) => trim($v) !== '')));
+            foreach ($riskList as $riskId) {
+                DB::table('tenant_document_link_riesgo_trs')->insert([
+                    'tenant_id' => $tenantId,
+                    'link_id' => $id,
+                    'riesgo_id' => $riskId,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
+        }
+
+        $this->auditLogger->logFromRequest($request, [
+            'event_type' => 'document_link_created',
+            'module' => 'documents',
+            'entity_id' => (string) $id,
+            'entity_type' => 'tenant_document_link',
+            'new_value' => ['id' => $id, 'folder_id' => $folderId, 'title' => $title, 'url' => $url],
+        ]);
+
+        return response()->json(['id' => $id, 'message' => 'OK']);
+    }
+
+    public function updateLink(Request $request, int $linkId): JsonResponse
+    {
+        $tenantId = $this->tenantContext->tenantId();
+        if ($tenantId === null) {
+            return response()->json(['message' => __('messages.tenant.missing')], 422);
+        }
+        if (! Schema::hasTable('tenant_document_links')) {
+            return response()->json(['message' => 'Missing tenant_document_links table.'], 422);
+        }
+
+        $data = $request->validate([
+            'title' => ['required', 'string', 'max:255'],
+            'url' => ['required', 'string', 'max:2000'],
+            'risk_ids' => ['sometimes', 'array'],
+            'risk_ids.*' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $exists = DB::table('tenant_document_links')
+            ->where('id', $linkId)
+            ->where('tenant_id', $tenantId)
+            ->exists();
+        if (! $exists) {
+            return response()->json(['message' => 'Link not found.'], 404);
+        }
+
+        $url = trim((string) $data['url']);
+        if (! preg_match('/^https?:\/\//i', $url)) {
+            $url = 'https://'.$url;
+        }
+
+        DB::table('tenant_document_links')
+            ->where('id', $linkId)
+            ->where('tenant_id', $tenantId)
+            ->update([
+                'title' => trim((string) $data['title']),
+                'url' => $url,
+                'updated_at' => now(),
+            ]);
+
+        if (array_key_exists('risk_ids', $data) && Schema::hasTable('tenant_document_link_riesgo_trs')) {
+            DB::table('tenant_document_link_riesgo_trs')
+                ->where('tenant_id', $tenantId)
+                ->where('link_id', $linkId)
+                ->delete();
+            $riskList = $data['risk_ids'] ?? [];
+            if (! is_array($riskList)) {
+                $riskList = [$riskList];
+            }
+            $riskList = array_values(array_unique(array_filter(array_map('strval', $riskList), fn ($v) => trim($v) !== '')));
+            foreach ($riskList as $riskId) {
+                DB::table('tenant_document_link_riesgo_trs')->insert([
+                    'tenant_id' => $tenantId,
+                    'link_id' => $linkId,
+                    'riesgo_id' => $riskId,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
+        }
+
+        return response()->json(['message' => 'OK']);
+    }
+
+    public function deleteLink(Request $request, int $linkId): JsonResponse
+    {
+        $tenantId = $this->tenantContext->tenantId();
+        if ($tenantId === null) {
+            return response()->json(['message' => __('messages.tenant.missing')], 422);
+        }
+        if (! Schema::hasTable('tenant_document_links')) {
+            return response()->json(['message' => 'Missing tenant_document_links table.'], 422);
+        }
+
+        $link = DB::table('tenant_document_links')
+            ->where('id', $linkId)
+            ->where('tenant_id', $tenantId)
+            ->first(['id', 'title', 'url']);
+        if (! $link) {
+            return response()->json(['message' => 'Link not found.'], 404);
+        }
+
+        if (Schema::hasTable('tenant_document_link_riesgo_trs')) {
+            DB::table('tenant_document_link_riesgo_trs')
+                ->where('tenant_id', $tenantId)
+                ->where('link_id', $linkId)
+                ->delete();
+        }
+        DB::table('tenant_document_links')
+            ->where('id', $linkId)
+            ->where('tenant_id', $tenantId)
+            ->delete();
+
+        return response()->json(['message' => 'OK']);
     }
 
     public function uploadDocuments(Request $request, int $folderId): JsonResponse
