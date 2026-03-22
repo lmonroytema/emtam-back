@@ -338,6 +338,31 @@ class TenantSettingsController extends Controller
         ]);
     }
 
+    public function publicProfile(Request $request): JsonResponse
+    {
+        $tenantId = $this->tenantContext->tenantId();
+        if ($tenantId === null || $tenantId === '') {
+            $tenantId = trim((string) $request->query('tenant_id', ''));
+        }
+
+        if ($tenantId === '') {
+            return response()->json(['message' => __('messages.tenant.missing')], 422);
+        }
+
+        $tenant = Tenant::query()->firstOrCreate(
+            ['tenant_id' => $tenantId],
+            ['name' => $tenantId, 'default_language' => 'es'],
+        );
+
+        return response()->json([
+            'tenant' => [
+                'tenant_id' => $tenant->tenant_id,
+                'name' => $tenant->name,
+                'logo_url' => $this->tenantLogoUrl($tenant),
+            ],
+        ]);
+    }
+
     private function tenantLogoUrl(Tenant $tenant): ?string
     {
         $path = $tenant->logo_path;

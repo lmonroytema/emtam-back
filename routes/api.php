@@ -21,6 +21,7 @@ Route::prefix('v1')->group(function () {
     Route::post('auth/2fa/verify', [AuthController::class, 'verifyTwoFactor']);
     Route::post('auth/2fa/resend', [AuthController::class, 'resendTwoFactor']);
     Route::get('tenant/{tenantId}/logo', [TenantSettingsController::class, 'publicLogo']);
+    Route::get('tenant/public-profile', [TenantSettingsController::class, 'publicProfile']);
 
     Route::middleware(['auth:sanctum', 'restrictAuditor'])->group(function () {
         Route::post('activacion', [ActivationController::class, 'store']);
