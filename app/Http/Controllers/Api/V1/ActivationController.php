@@ -1036,7 +1036,7 @@ class ActivationController extends Controller
             }
             $notificationMessage = $tmp;
         }
-        $emailSubject = $subjectPrefix.'Acciones asignadas — '.$planName;
+        $emailSubject = $subjectPrefix.$planName;
         $emailBody = ($notificationMessage !== '' ? $notificationMessage : '')."\n";
         $escapeHtml = static fn ($value) => htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
         $buildActionsByTipo = static function (array $acciones): array {

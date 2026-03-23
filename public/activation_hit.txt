@@ -1,17 +1,18 @@
-Hit at 2026-03-23 03:28:38
+Hit at 2026-03-23 15:12:30
 Array
 (
     [ti_em_id] => TE01
-    [rie_id] => R03
-    [ni_al_id] => NA04
+    [rie_id] => R04
+    [ni_al_id] => NA02
     [per_id] => PER01
     [rol_id] => ROL04
     [cargo_declarado] => 
-    [fecha_activac] => 2026-03-22
-    [hora_activac] => 22:28
+    [fecha_activac] => 2026-03-23
+    [hora_activac] => 10:11
     [estado] => ACTIVA
     [mensaje_inic] => 
     [mensaje_simul] => 
     [observ] => 
-    [info_adicional] => xx
+    [info_adicional] => sss
+    [justificacion] => 26
 )
