@@ -3500,6 +3500,577 @@ class ActivationController extends Controller
         });
     }
 
+    public function auditActions(Request $request, string $activationId): JsonResponse
+    {
+        $tenantId = $this->tenantContext->tenantId();
+        if ($tenantId === null) {
+            return response()->json(['message' => __('messages.tenant.missing')], 422);
+        }
+
+        $activationId = trim($activationId);
+        if ($activationId === '') {
+            return response()->json(['message' => 'Invalid activation id.'], 422);
+        }
+
+        if (! Schema::hasTable('activacion_del_plan_trs')) {
+            return response()->json(['message' => 'Missing activacion_del_plan_trs table.'], 422);
+        }
+
+        $activationExists = DB::table('activacion_del_plan_trs')
+            ->when(
+                Schema::hasColumn('activacion_del_plan_trs', 'ac_de_pl-tenant_id'),
+                static fn ($q) => $q->where('ac_de_pl-tenant_id', $tenantId),
+            )
+            ->where('ac_de_pl-id', $activationId)
+            ->exists();
+        if (! $activationExists) {
+            return response()->json(['message' => 'Activation not found.'], 404);
+        }
+
+        $activationRow = DB::table('activacion_del_plan_trs')
+            ->when(
+                Schema::hasColumn('activacion_del_plan_trs', 'ac_de_pl-tenant_id'),
+                static fn ($q) => $q->where('ac_de_pl-tenant_id', $tenantId),
+            )
+            ->where('ac_de_pl-id', $activationId)
+            ->first(['ac_de_pl-rie_id-fk', 'ac_de_pl-ni_al_id-fk-inicial']);
+        $riesgoId = trim((string) ($activationRow?->{'ac_de_pl-rie_id-fk'} ?? ''));
+
+        $normalizeActionStatus = static function (?object $ejec): string {
+            $estado = strtoupper(trim((string) ($ejec?->{'ej_ac-estado'} ?? '')));
+            $tsFin = trim((string) ($ejec?->{'ej_ac-ts_fin'} ?? ''));
+            if (in_array($estado, ['REALIZADA', 'REALIZADO', 'EJECUTADA', 'EJECUTADO'], true) || $tsFin !== '') {
+                return 'REALIZADA';
+            }
+            if (in_array($estado, ['INICIADA', 'INICIADO', 'EN_CURSO', 'EN CURSO', 'EN_PROGRESO', 'EN PROGRESO'], true)) {
+                return 'EN_CURSO';
+            }
+            if (in_array($estado, ['CONFIRMADO', 'CONFIRMADA', 'NO_INICIADA', 'NO INICIADO'], true)) {
+                return 'NO_INICIADA';
+            }
+
+            return 'PENDIENTE';
+        };
+
+        $asignacionById = [];
+        if (Schema::hasTable('asignacion_en_funciones_trs')) {
+            $asignacionColumns = [
+                'as_en_fu-id',
+                'as_en_fu-gr_op_id-fk',
+                'as_en_fu-per_id-fk',
+                'as_en_fu-tipo_asignacion',
+                'as_en_fu-ts_ini',
+                'as_en_fu-ts_fin',
+                'as_en_fu-estado',
+            ];
+            if (Schema::hasColumn('asignacion_en_funciones_trs', 'as_en_fu-per_id-fk-delegador')) {
+                $asignacionColumns[] = 'as_en_fu-per_id-fk-delegador';
+            }
+            $asignaciones = DB::table('asignacion_en_funciones_trs')
+                ->when(
+                    Schema::hasColumn('asignacion_en_funciones_trs', 'as_en_fu-tenant_id'),
+                    static fn ($q) => $q->where('as_en_fu-tenant_id', $tenantId),
+                )
+                ->where('as_en_fu-ac_de_pl_id-fk', $activationId)
+                ->get($asignacionColumns);
+            foreach ($asignaciones as $a) {
+                $id = trim((string) ($a->{'as_en_fu-id'} ?? ''));
+                if ($id === '') {
+                    continue;
+                }
+                $asignacionById[$id] = $a;
+            }
+        }
+
+        $ejecRows = [];
+        if (Schema::hasTable('ejecucion_accion_trs')) {
+            $ejecRows = DB::table('ejecucion_accion_trs')
+                ->when(
+                    Schema::hasColumn('ejecucion_accion_trs', 'ej_ac-tenant_id'),
+                    static fn ($q) => $q->where('ej_ac-tenant_id', $tenantId),
+                )
+                ->where('ej_ac-ac_de_pl_id-fk', $activationId)
+                ->get([
+                    'ej_ac-id',
+                    'ej_ac-gr_op_id-fk',
+                    'ej_ac-ac_se_de_id-fk',
+                    'ej_ac-as_en_fu_id-fk',
+                    'ej_ac-estado',
+                    'ej_ac-ts_ini',
+                    'ej_ac-ts_fin',
+                ])
+                ->all();
+        }
+
+        $nivelRows = [];
+        if (Schema::hasTable('activacion_nivel_hist_trs')) {
+            $nivelRows = DB::table('activacion_nivel_hist_trs')
+                ->when(
+                    Schema::hasColumn('activacion_nivel_hist_trs', 'ac_ni_hi-tenant_id'),
+                    static fn ($q) => $q->where('ac_ni_hi-tenant_id', $tenantId),
+                )
+                ->where('ac_ni_hi-ac_de_pl_id-fk', $activationId)
+                ->orderByRaw("CAST(COALESCE(`ac_ni_hi-orden`, '0') AS UNSIGNED) ASC")
+                ->get(['ac_ni_hi-ni_al_id-fk', 'ac_ni_hi-ac_se_id-fk', 'ac_ni_hi-orden'])
+                ->all();
+        }
+        $nivelIds = [];
+        foreach ($nivelRows as $n) {
+            $nid = trim((string) ($n->{'ac_ni_hi-ni_al_id-fk'} ?? ''));
+            if ($nid !== '') {
+                $nivelIds[$nid] = true;
+            }
+        }
+        $nivelInicialId = trim((string) ($activationRow?->{'ac_de_pl-ni_al_id-fk-inicial'} ?? ''));
+        if ($nivelInicialId !== '') {
+            $nivelIds[$nivelInicialId] = true;
+        }
+
+        $bestMappingByNivelId = [];
+        if ($riesgoId !== '' && ! empty($nivelIds) && Schema::hasTable('riesgo_nivel_accion_set_cfg')) {
+            $mappings = DB::table('riesgo_nivel_accion_set_cfg')
+                ->when(
+                    Schema::hasColumn('riesgo_nivel_accion_set_cfg', 'ri_ni_ac_se-tenant_id'),
+                    static fn ($q) => $q->where('ri_ni_ac_se-tenant_id', $tenantId),
+                )
+                ->where('ri_ni_ac_se-rie_id-fk', $riesgoId)
+                ->whereIn('ri_ni_ac_se-ni_al_id-fk', array_keys($nivelIds))
+                ->get([
+                    'ri_ni_ac_se-ni_al_id-fk',
+                    'ri_ni_ac_se-ac_se_id-fk',
+                    'ri_ni_ac_se-prioridad',
+                    'ri_ni_ac_se-activo',
+                ]);
+            $groupedMappings = [];
+            foreach ($mappings as $m) {
+                $nid = trim((string) ($m->{'ri_ni_ac_se-ni_al_id-fk'} ?? ''));
+                if ($nid === '') {
+                    continue;
+                }
+                $groupedMappings[$nid][] = $m;
+            }
+            foreach ($groupedMappings as $nid => $items) {
+                usort($items, static function ($a, $b): int {
+                    $pa = (int) ($a->{'ri_ni_ac_se-prioridad'} ?? 9999);
+                    $pb = (int) ($b->{'ri_ni_ac_se-prioridad'} ?? 9999);
+
+                    return $pa <=> $pb;
+                });
+                $selected = null;
+                foreach ($items as $item) {
+                    $activo = strtoupper(trim((string) ($item->{'ri_ni_ac_se-activo'} ?? 'SI')));
+                    if ($activo !== 'NO') {
+                        $selected = $item;
+                        break;
+                    }
+                }
+                $bestMappingByNivelId[$nid] = $selected ?? ($items[0] ?? null);
+            }
+        }
+
+        $actionSetIds = [];
+        foreach ($nivelRows as $n) {
+            $setId = trim((string) ($n->{'ac_ni_hi-ac_se_id-fk'} ?? ''));
+            $nid = trim((string) ($n->{'ac_ni_hi-ni_al_id-fk'} ?? ''));
+            if ($setId === '' && $nid !== '') {
+                $setId = trim((string) ($bestMappingByNivelId[$nid]?->{'ri_ni_ac_se-ac_se_id-fk'} ?? ''));
+            }
+            if ($setId !== '') {
+                $actionSetIds[$setId] = true;
+            }
+        }
+        if ($nivelInicialId !== '' && isset($bestMappingByNivelId[$nivelInicialId])) {
+            $initialSetId = trim((string) ($bestMappingByNivelId[$nivelInicialId]?->{'ri_ni_ac_se-ac_se_id-fk'} ?? ''));
+            if ($initialSetId !== '') {
+                $actionSetIds[$initialSetId] = true;
+            }
+        }
+
+        $latestEjecByKey = [];
+        $detalleIds = [];
+        foreach ($ejecRows as $row) {
+            $detalleId = trim((string) ($row->{'ej_ac-ac_se_de_id-fk'} ?? ''));
+            if ($detalleId === '') {
+                continue;
+            }
+            $detalleIds[$detalleId] = true;
+            $gid = trim((string) ($row->{'ej_ac-gr_op_id-fk'} ?? ''));
+            if ($gid === '') {
+                $asignacionId = trim((string) ($row->{'ej_ac-as_en_fu_id-fk'} ?? ''));
+                $gid = trim((string) ($asignacionById[$asignacionId]?->{'as_en_fu-gr_op_id-fk'} ?? ''));
+            }
+            $groupKey = $gid !== '' ? $gid : 'SIN_GRUPO';
+            $key = $groupKey.'|'.$detalleId;
+            $ts = trim((string) ($row->{'ej_ac-ts_fin'} ?? $row->{'ej_ac-ts_ini'} ?? ''));
+            $prev = $latestEjecByKey[$key] ?? null;
+            $prevTs = $prev ? trim((string) ($prev->{'ej_ac-ts_fin'} ?? $prev->{'ej_ac-ts_ini'} ?? '')) : '';
+            if (! $prev || $ts > $prevTs) {
+                $latestEjecByKey[$key] = $row;
+            }
+        }
+
+        if (! empty($actionSetIds) && Schema::hasTable('accion_set_detalle_cfg')) {
+            $detallesPorSet = DB::table('accion_set_detalle_cfg')
+                ->when(
+                    Schema::hasColumn('accion_set_detalle_cfg', 'ac_se_de-tenant_id'),
+                    static fn ($q) => $q->where('ac_se_de-tenant_id', $tenantId),
+                )
+                ->whereIn('ac_se_de-ac_se_id-fk', array_keys($actionSetIds))
+                ->where(function ($q) {
+                    $q->whereNull('ac_se_de-activo')
+                        ->orWhereRaw("UPPER(TRIM(COALESCE(`ac_se_de-activo`, 'SI'))) <> 'NO'");
+                })
+                ->get(['ac_se_de-id']);
+            foreach ($detallesPorSet as $d) {
+                $did = trim((string) ($d->{'ac_se_de-id'} ?? ''));
+                if ($did !== '') {
+                    $detalleIds[$did] = true;
+                }
+            }
+        }
+
+        $detalleById = [];
+        if (Schema::hasTable('accion_set_detalle_cfg') && ! empty($detalleIds)) {
+            $detalles = DB::table('accion_set_detalle_cfg')
+                ->when(
+                    Schema::hasColumn('accion_set_detalle_cfg', 'ac_se_de-tenant_id'),
+                    static fn ($q) => $q->where('ac_se_de-tenant_id', $tenantId),
+                )
+                ->whereIn('ac_se_de-id', array_keys($detalleIds))
+                ->get([
+                    'ac_se_de-id',
+                    'ac_se_de-rol_id-fk',
+                    'ac_se_de-ac_op_id-fk',
+                    'ac_se_de-detalle',
+                    'ac_se_de-ord_ejec',
+                ]);
+            foreach ($detalles as $d) {
+                $id = trim((string) ($d->{'ac_se_de-id'} ?? ''));
+                if ($id === '') {
+                    continue;
+                }
+                $detalleById[$id] = $d;
+            }
+        }
+
+        $opById = [];
+        $opIds = array_values(array_filter(array_map(
+            static fn ($d) => trim((string) ($d?->{'ac_se_de-ac_op_id-fk'} ?? '')),
+            $detalleById
+        )));
+        if (Schema::hasTable('accion_operativa_cfg') && ! empty($opIds)) {
+            $ops = DB::table('accion_operativa_cfg')
+                ->when(
+                    Schema::hasColumn('accion_operativa_cfg', 'ac_op-tenant_id'),
+                    static fn ($q) => $q->where('ac_op-tenant_id', $tenantId),
+                )
+                ->whereIn('ac_op-id', $opIds)
+                ->get(['ac_op-id', 'ac_op-cod', 'ac_op-descrip']);
+            foreach ($ops as $op) {
+                $id = trim((string) ($op->{'ac_op-id'} ?? ''));
+                if ($id === '') {
+                    continue;
+                }
+                $opById[$id] = $op;
+            }
+        }
+
+        $personaIds = [];
+        foreach ($asignacionById as $asg) {
+            $perId = trim((string) ($asg->{'as_en_fu-per_id-fk'} ?? ''));
+            $delegadorId = trim((string) ($asg->{'as_en_fu-per_id-fk-delegador'} ?? ''));
+            if ($perId !== '') {
+                $personaIds[$perId] = true;
+            }
+            if ($delegadorId !== '') {
+                $personaIds[$delegadorId] = true;
+            }
+        }
+
+        $personaById = [];
+        if (Schema::hasTable('persona_mst') && ! empty($personaIds)) {
+            $personas = DB::table('persona_mst')
+                ->when(
+                    Schema::hasColumn('persona_mst', 'per-tenant_id'),
+                    static fn ($q) => $q->where('per-tenant_id', $tenantId),
+                )
+                ->whereIn('per-id', array_keys($personaIds))
+                ->get(['per-id', 'per-nombre', 'per-apellido_1', 'per-apellido_2', 'per-email']);
+            foreach ($personas as $p) {
+                $id = trim((string) ($p->{'per-id'} ?? ''));
+                if ($id === '') {
+                    continue;
+                }
+                $personaById[$id] = $p;
+            }
+        }
+
+        $titularOriginalByKey = [];
+        foreach ($ejecRows as $row) {
+            $detalleId = trim((string) ($row->{'ej_ac-ac_se_de_id-fk'} ?? ''));
+            if ($detalleId === '') {
+                continue;
+            }
+            $asignacionId = trim((string) ($row->{'ej_ac-as_en_fu_id-fk'} ?? ''));
+            if ($asignacionId === '') {
+                continue;
+            }
+            $asg = $asignacionById[$asignacionId] ?? null;
+            if (! $asg) {
+                continue;
+            }
+            $tipo = strtoupper(trim((string) ($asg->{'as_en_fu-tipo_asignacion'} ?? '')));
+            if ($tipo !== 'TITULAR') {
+                continue;
+            }
+            $perId = trim((string) ($asg->{'as_en_fu-per_id-fk'} ?? ''));
+            if ($perId === '') {
+                continue;
+            }
+            $gid = trim((string) ($row->{'ej_ac-gr_op_id-fk'} ?? ''));
+            if ($gid === '') {
+                $gid = trim((string) ($asg->{'as_en_fu-gr_op_id-fk'} ?? ''));
+            }
+            $groupKey = $gid !== '' ? $gid : 'SIN_GRUPO';
+            $key = $groupKey.'|'.$detalleId;
+            $ts = trim((string) ($asg->{'as_en_fu-ts_ini'} ?? $row->{'ej_ac-ts_ini'} ?? ''));
+            $prev = $titularOriginalByKey[$key] ?? null;
+            if (! $prev || strcmp((string) ($prev['ts'] ?? ''), $ts) > 0) {
+                $titularOriginalByKey[$key] = ['per_id' => $perId, 'ts' => $ts];
+            }
+        }
+
+        $notificationTsByPersonaId = [];
+        if (Schema::hasTable('notificacion_envio_trs')) {
+            $sent = DB::table('notificacion_envio_trs')
+                ->when(
+                    Schema::hasColumn('notificacion_envio_trs', 'no_en-tenant_id'),
+                    static fn ($q) => $q->where('no_en-tenant_id', $tenantId),
+                )
+                ->where('no_en-ac_de_pl_id-fk', $activationId)
+                ->whereNotNull('no_en-per_id-fk')
+                ->orderBy('no_en-ts', 'asc')
+                ->orderBy('no_en-id', 'asc')
+                ->get(['no_en-per_id-fk', 'no_en-ts']);
+            foreach ($sent as $n) {
+                $perId = trim((string) ($n->{'no_en-per_id-fk'} ?? ''));
+                $ts = trim((string) ($n->{'no_en-ts'} ?? ''));
+                if ($perId === '' || $ts === '') {
+                    continue;
+                }
+                if (! array_key_exists($perId, $notificationTsByPersonaId)) {
+                    $notificationTsByPersonaId[$perId] = $ts;
+                }
+            }
+        }
+
+        $rolToGrupoId = [];
+        if (Schema::hasTable('persona_rol_grupo_cfg')) {
+            $rolGroupRows = DB::table('persona_rol_grupo_cfg')
+                ->when(
+                    Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-tenant_id'),
+                    static fn ($q) => $q->where('pe_ro_gr-tenant_id', $tenantId),
+                )
+                ->where(function ($q) {
+                    $q->whereNull('pe_ro_gr-activo')
+                        ->orWhereRaw("UPPER(TRIM(COALESCE(`pe_ro_gr-activo`, 'SI'))) <> 'NO'");
+                })
+                ->whereNull('pe_ro_gr-fech_fin')
+                ->get(['pe_ro_gr-rol_id-fk', 'pe_ro_gr-gr_op_id-fk']);
+            foreach ($rolGroupRows as $row) {
+                $rolId = trim((string) ($row->{'pe_ro_gr-rol_id-fk'} ?? ''));
+                $gid = trim((string) ($row->{'pe_ro_gr-gr_op_id-fk'} ?? ''));
+                if ($rolId === '' || $gid === '' || isset($rolToGrupoId[$rolId])) {
+                    continue;
+                }
+                $rolToGrupoId[$rolId] = $gid;
+            }
+        }
+
+        $latestAsignacionByGroupRole = [];
+        $latestAsignacionByGroup = [];
+        foreach ($asignacionById as $asgId => $asg) {
+            $gid = trim((string) ($asg->{'as_en_fu-gr_op_id-fk'} ?? ''));
+            $pid = trim((string) ($asg->{'as_en_fu-per_id-fk'} ?? ''));
+            if ($gid === '' || $pid === '') {
+                continue;
+            }
+            $ts = trim((string) ($asg->{'as_en_fu-ts_ini'} ?? ''));
+            $existingGroup = $latestAsignacionByGroup[$gid] ?? null;
+            if (! $existingGroup || strcmp((string) ($existingGroup['ts'] ?? ''), $ts) <= 0) {
+                $latestAsignacionByGroup[$gid] = ['id' => $asgId, 'ts' => $ts];
+            }
+            $tipo = strtoupper(trim((string) ($asg->{'as_en_fu-tipo_asignacion'} ?? '')));
+            if ($tipo !== 'TITULAR') {
+                continue;
+            }
+            foreach ($detalleById as $did => $d) {
+                $rolId = trim((string) ($d->{'ac_se_de-rol_id-fk'} ?? ''));
+                if ($rolId === '') {
+                    continue;
+                }
+                $key = $gid.'|'.$rolId;
+                $existing = $latestAsignacionByGroupRole[$key] ?? null;
+                if (! $existing || strcmp((string) ($existing['ts'] ?? ''), $ts) <= 0) {
+                    $latestAsignacionByGroupRole[$key] = ['id' => $asgId, 'ts' => $ts];
+                }
+            }
+        }
+
+        $allRowKeys = array_keys($latestEjecByKey);
+        foreach ($detalleById as $detalleId => $detalle) {
+            $rolId = trim((string) ($detalle?->{'ac_se_de-rol_id-fk'} ?? ''));
+            $gid = $rolId !== '' ? trim((string) ($rolToGrupoId[$rolId] ?? '')) : '';
+            $groupKey = $gid !== '' ? $gid : 'SIN_GRUPO';
+            $key = $groupKey.'|'.$detalleId;
+            if (! isset($latestEjecByKey[$key])) {
+                $allRowKeys[] = $key;
+            }
+        }
+        $allRowKeys = array_values(array_unique($allRowKeys));
+
+        $rows = [];
+        foreach ($allRowKeys as $key) {
+            $ejec = $latestEjecByKey[$key] ?? null;
+            [$groupKey, $detalleId] = array_pad(explode('|', $key, 2), 2, '');
+            $detalle = $detalleById[$detalleId] ?? null;
+            $rolId = trim((string) ($detalle?->{'ac_se_de-rol_id-fk'} ?? ''));
+            $opId = trim((string) ($detalle?->{'ac_se_de-ac_op_id-fk'} ?? ''));
+            $op = $opById[$opId] ?? null;
+            $asignacionId = trim((string) ($ejec?->{'ej_ac-as_en_fu_id-fk'} ?? ''));
+            if ($asignacionId === '' && $groupKey !== 'SIN_GRUPO' && $rolId !== '') {
+                $asignacionId = (string) ($latestAsignacionByGroupRole[$groupKey.'|'.$rolId]['id'] ?? '');
+            }
+            if ($asignacionId === '' && $groupKey !== 'SIN_GRUPO') {
+                $asignacionId = (string) ($latestAsignacionByGroup[$groupKey]['id'] ?? '');
+            }
+            $asg = $asignacionById[$asignacionId] ?? null;
+            $personaId = trim((string) ($asg?->{'as_en_fu-per_id-fk'} ?? ''));
+            $delegadorId = trim((string) ($asg?->{'as_en_fu-per_id-fk-delegador'} ?? ''));
+            $delegated = $personaId !== '' && $delegadorId !== '' && $personaId !== $delegadorId;
+            $titularOriginalId = trim((string) ($titularOriginalByKey[$key]['per_id'] ?? ''));
+            $accion = trim((string) ($op?->{'ac_op-descrip'} ?? ''));
+            if ($accion === '') {
+                $accion = trim((string) ($op?->{'ac_op-cod'} ?? ''));
+            }
+            if ($accion === '') {
+                $accion = trim((string) ($detalle?->{'ac_se_de-detalle'} ?? ''));
+            }
+            if ($accion === '') {
+                $accion = $detalleId !== '' ? $detalleId : trim((string) ($ejec->{'ej_ac-id'} ?? ''));
+            }
+            $tsIni = trim((string) ($ejec?->{'ej_ac-ts_ini'} ?? ''));
+            $tsFin = trim((string) ($ejec?->{'ej_ac-ts_fin'} ?? ''));
+            $durationMinutes = null;
+            if ($tsIni !== '' && $tsFin !== '') {
+                try {
+                    $durationMinutes = Carbon::parse($tsIni)->diffInMinutes(Carbon::parse($tsFin));
+                } catch (\Throwable) {
+                    $durationMinutes = null;
+                }
+            }
+            $notificationTs = $personaId !== '' ? ($notificationTsByPersonaId[$personaId] ?? null) : null;
+            $status = $normalizeActionStatus($ejec);
+            if ($status === 'PENDIENTE' && $notificationTs !== null) {
+                $status = 'ENVIADA';
+            }
+            $rows[] = [
+                'id' => $detalleId !== '' ? $detalleId : trim((string) ($ejec?->{'ej_ac-id'} ?? '')),
+                'group_id' => $groupKey,
+                'role_id' => $rolId,
+                'action' => $accion,
+                'status' => $status,
+                'notification_ts' => $notificationTs,
+                'start_ts' => $tsIni !== '' ? $tsIni : null,
+                'end_ts' => $tsFin !== '' ? $tsFin : null,
+                'duration_minutes' => $durationMinutes,
+                'persona_id' => $personaId !== '' ? $personaId : null,
+                'responsible_id' => $personaId !== '' ? $personaId : null,
+                'delegated' => $delegated,
+                'delegator_id' => $delegadorId !== '' ? $delegadorId : null,
+                'titular_original_id' => $titularOriginalId !== '' ? $titularOriginalId : null,
+                'has_execution' => $ejec !== null,
+                'order' => (int) ($detalle?->{'ac_se_de-ord_ejec'} ?? 9999),
+            ];
+        }
+
+        usort($rows, static function (array $a, array $b): int {
+            $ao = (int) ($a['order'] ?? 9999);
+            $bo = (int) ($b['order'] ?? 9999);
+            if ($ao !== $bo) {
+                return $ao <=> $bo;
+            }
+
+            return strcmp((string) ($a['id'] ?? ''), (string) ($b['id'] ?? ''));
+        });
+
+        $total = count($rows);
+        $done = 0;
+        $inProgress = 0;
+        $pending = 0;
+        $delegatedCount = 0;
+        $withDurationCount = 0;
+        $durationTotal = 0;
+        $responsablesSet = [];
+        foreach ($rows as $row) {
+            $status = strtoupper(trim((string) ($row['status'] ?? 'PENDIENTE')));
+            if ($status === 'REALIZADA') {
+                $done++;
+            } elseif ($status === 'EN_CURSO') {
+                $inProgress++;
+            } else {
+                $pending++;
+            }
+            if (! empty($row['delegated'])) {
+                $delegatedCount++;
+            }
+            $duration = $row['duration_minutes'];
+            if (is_int($duration) || is_float($duration)) {
+                $withDurationCount++;
+                $durationTotal += (int) $duration;
+            }
+            $responsableId = trim((string) ($row['responsible_id'] ?? ''));
+            if ($responsableId !== '') {
+                $responsablesSet[$responsableId] = true;
+            }
+        }
+
+        $warnings = [];
+        if ($total === 0) {
+            $warnings[] = 'No execution records found for this activation.';
+        }
+
+        return response()->json([
+            'activation_id' => $activationId,
+            'stats' => [
+                'total' => $total,
+                'done' => $done,
+                'in_progress' => $inProgress,
+                'pending' => $pending,
+                'delegated' => $delegatedCount,
+                'responsables' => count($responsablesSet),
+                'with_duration' => $withDurationCount,
+                'avg_duration_minutes' => $withDurationCount > 0 ? (int) round($durationTotal / $withDurationCount) : null,
+            ],
+            'rows' => $rows,
+            'personas' => array_map(static function ($p) {
+                $id = trim((string) ($p->{'per-id'} ?? ''));
+                $nombre = trim(implode(' ', array_filter([
+                    (string) ($p->{'per-nombre'} ?? ''),
+                    (string) ($p->{'per-apellido_1'} ?? ''),
+                    (string) ($p->{'per-apellido_2'} ?? ''),
+                ])));
+
+                return [
+                    'id' => $id,
+                    'nombre' => $nombre !== '' ? $nombre : $id,
+                    'email' => $p->{'per-email'} ?? null,
+                ];
+            }, array_values($personaById)),
+            'warnings' => $warnings,
+        ]);
+    }
+
     public function controlPanel(Request $request, string $activationId): JsonResponse
     {
         $tenantId = $this->tenantContext->tenantId();

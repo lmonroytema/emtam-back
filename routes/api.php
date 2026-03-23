@@ -27,6 +27,7 @@ Route::prefix('v1')->group(function () {
         Route::post('activacion', [ActivationController::class, 'store']);
         Route::get('activacion/preview', [ActivationController::class, 'preview']);
         Route::get('activacion/{activationId}/control', [ActivationController::class, 'controlPanel']);
+        Route::get('activacion/{activationId}/audit/actions', [ActivationController::class, 'auditActions']);
         Route::get('activacion/{activationId}/control/access', [ActivationController::class, 'checkControlPanelAccess']);
         Route::post('activacion/{activationId}/control/access', [ActivationController::class, 'grantControlPanelAccess']);
         Route::put('activacion/{activationId}/nivel', [ActivationController::class, 'changeLevel']);
