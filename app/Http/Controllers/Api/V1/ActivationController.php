@@ -1699,13 +1699,19 @@ class ActivationController extends Controller
             return response()->json(['message' => 'Invalid activation id.'], 422);
         }
 
-        if (! Schema::hasTable('activacion_control')) {
+        $activationTable = null;
+        if (Schema::hasTable('activacion_control')) {
+            $activationTable = 'activacion_control';
+        } elseif (Schema::hasTable('activacion_del_plan_trs')) {
+            $activationTable = 'activacion_del_plan_trs';
+        }
+        if ($activationTable === null) {
             return response()->json(['message' => 'Missing activation table.'], 422);
         }
 
-        $activation = DB::table('activacion_control')
+        $activation = DB::table($activationTable)
             ->when(
-                Schema::hasColumn('activacion_control', 'ac_de_pl-tenant_id'),
+                Schema::hasColumn($activationTable, 'ac_de_pl-tenant_id'),
                 static fn ($q) => $q->where('ac_de_pl-tenant_id', $tenantId),
             )
             ->where('ac_de_pl-id', $activationId)
@@ -1717,7 +1723,7 @@ class ActivationController extends Controller
 
         $tiEmId = trim((string) ($activation->{'ac_de_pl-ti_em_id-fk'} ?? ''));
         $rieId = trim((string) ($activation->{'ac_de_pl-rie_id-fk'} ?? ''));
-        $nivelId = trim((string) ($activation->{'ac_de_pl-ni_al_id-fk'} ?? ''));
+        $nivelId = trim((string) ($activation->{'ac_de_pl-ni_al_id-fk'} ?? $activation->{'ac_de_pl-ni_al_id-fk-inicial'} ?? ''));
         $isSimulacro = strtoupper(trim((string) ($activation->{'ac_de_pl-es_simul'} ?? 'NO'))) === 'SI';
 
         $tenant = Tenant::query()->firstOrCreate(
@@ -1783,38 +1789,45 @@ class ActivationController extends Controller
         $isAviso = $nivelUpper !== '' && (str_contains($nivelUpper, 'AVISO') || $nivelCod === 'AVISO' || $nivelCod === 'AV' || str_starts_with($nivelCod, 'AV'));
         $isPrealerta = $nivelUpper !== '' && (str_contains($nivelUpper, 'PREALERTA') || str_starts_with($nivelCod, 'P'));
         $scenarioLabel = $isPrealerta ? 'Prealerta' : ($isAviso ? 'Aviso' : 'Resumen');
+        $motivoDetalle = trim((string) ($activation->{'ac_ni_hi-info_adicional'} ?? ''));
+        if ($motivoDetalle === '' && Schema::hasTable('activacion_nivel_hist_trs')) {
+            $row = DB::table('activacion_nivel_hist_trs')
+                ->when(
+                    Schema::hasColumn('activacion_nivel_hist_trs', 'ac_ni_hi-tenant_id'),
+                    static fn ($q) => $q->where('ac_ni_hi-tenant_id', $tenantId),
+                )
+                ->where('ac_ni_hi-ac_de_pl_id-fk', $activationId)
+                ->orderByRaw('COALESCE(CAST(`ac_ni_hi-orden` AS SIGNED),0) DESC')
+                ->orderByDesc('ac_ni_hi-id')
+                ->first(['ac_ni_hi-info_adicional']);
+            $motivoDetalle = trim((string) ($row->{'ac_ni_hi-info_adicional'} ?? ''));
+        }
+        if ($motivoDetalle === '') {
+            $motivoDetalle = trim((string) ($activation->{'ac_de_pl-observ'} ?? ''));
+        }
 
         $recipients = [];
         $recipientSource = 'none';
         if ($productionMode) {
-            if (Schema::hasTable('persona_mst') && $isAviso) {
-                $recipientSource = 'all_users';
-                $rows = DB::table('persona_mst as p')
+            if ($isAviso) {
+                $recipientSource = 'users_roles';
+                $rows = User::query()
                     ->when(
-                        Schema::hasColumn('persona_mst', 'per-tenant_id'),
-                        static fn ($q) => $q->where('p.per-tenant_id', $tenantId),
+                        Schema::hasColumn('users', 'tenant_id'),
+                        static fn ($q) => $q->where('tenant_id', $tenantId),
                     )
-                    ->when(
-                        Schema::hasColumn('persona_mst', 'per-activo'),
-                        static fn ($q) => $q->whereRaw("UPPER(COALESCE(`p`.`per-activo`, 'SI')) <> 'NO'"),
-                    )
-                    ->get([
-                        'p.per-email as email',
-                        'p.per-nombre as nombre',
-                        'p.per-apellido_1 as apellido_1',
-                        'p.per-apellido_2 as apellido_2',
-                    ]);
+                    ->get(['name', 'email', 'perfil']);
 
                 foreach ($rows as $row) {
+                    $perfil = strtolower(trim((string) ($row->perfil ?? '')));
+                    if (! in_array($perfil, ['director', 'recurso'], true)) {
+                        continue;
+                    }
                     $email = strtolower(trim((string) ($row->email ?? '')));
                     if ($email === '') {
                         continue;
                     }
-                    $recipients[$email] = trim(implode(' ', array_filter([
-                        (string) ($row->nombre ?? ''),
-                        (string) ($row->apellido_1 ?? ''),
-                        (string) ($row->apellido_2 ?? ''),
-                    ])));
+                    $recipients[$email] = trim((string) ($row->name ?? '')) ?: $email;
                 }
             } elseif (Schema::hasTable('persona_rol_grupo_cfg') && Schema::hasTable('persona_mst')) {
                 $recipientSource = 'roles_groups';
@@ -1885,6 +1898,7 @@ class ActivationController extends Controller
             .($tipoLabel ? '<div><strong>Tipo de emergencia:</strong> '.$escapeHtml($tipoLabel).'</div>' : '')
             .($riesgoLabel ? '<div><strong>Riesgo identificado:</strong> '.$escapeHtml($riesgoLabel).'</div>' : '')
             .($nivelLabel ? '<div><strong>Nivel de alerta:</strong> '.$escapeHtml($nivelLabel).'</div>' : '')
+            .($motivoDetalle !== '' ? '<div><strong>Motivo de activación:</strong> '.$escapeHtml($motivoDetalle).'</div>' : '')
             .'<div><strong>Fecha/hora:</strong> '.$escapeHtml(now()->toDateTimeString()).'</div>'
             .'</div>'
             .'<div>En este nivel no se generan acciones operativas.</div>'
@@ -1903,6 +1917,8 @@ class ActivationController extends Controller
                 'sent' => 0,
                 'files_written' => 0,
                 'recipients' => 0,
+                'recipient_emails' => [],
+                'sent_recipient_emails' => [],
                 'email_subject' => $subject,
                 'email_body' => strip_tags($bodyHtml),
                 'debug' => [
@@ -1938,6 +1954,8 @@ class ActivationController extends Controller
             'sent' => $sent,
             'files_written' => $filesWritten,
             'recipients' => count($recipients),
+            'recipient_emails' => array_values(array_keys($recipients)),
+            'sent_recipient_emails' => $sent > 0 ? array_values(array_keys($recipients)) : [],
             'email_subject' => $subject,
             'email_body' => strip_tags($bodyHtml),
             'warnings' => ! $emailNotificationsEnabled ? ['Envío de correos desactivado en configuración del tenant.'] : [],
