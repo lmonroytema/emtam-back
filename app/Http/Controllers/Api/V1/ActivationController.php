@@ -134,6 +134,7 @@ class ActivationController extends Controller
             $niAlCod = strtoupper(trim((string) ($niAl?->{'ni_al-cod'} ?? '')));
             $niAlNombre = strtoupper(trim((string) ($niAl?->{'ni_al-nombre'} ?? '')));
             $niEmActivaPlan = strtoupper(trim((string) ($niEm?->{'ni_em-activa_plan'} ?? 'NO')));
+            $criterioSelector = strtoupper(trim((string) ($data['justificacion'] ?? '')));
 
             $isAviso = $niAlCod !== '' && (str_contains($niAlNombre, 'AVISO') || $niAlCod === 'AVISO' || $niAlCod === 'AV' || str_starts_with($niAlCod, 'AV'));
             $isPrealerta = str_starts_with($niAlCod, 'P') || str_contains($niAlNombre, 'PREALERTA');
@@ -143,12 +144,23 @@ class ActivationController extends Controller
             }
 
             $scenario = 'NORMALIDAD';
-            if ($niEmActivaPlan === 'SI') {
+            if ($criterioSelector === 'NORMALIDAD') {
+                $scenario = 'NORMALIDAD';
+            } elseif ($criterioSelector === 'AVISO_SYNTH') {
+                $scenario = 'AVISO';
+            } elseif ($niEmActivaPlan === 'SI') {
                 $scenario = 'ACTIVACION';
             } elseif ($isPrealerta) {
                 $scenario = 'PREALERTA';
             } elseif ($isAviso) {
                 $scenario = 'AVISO';
+            }
+            $estadoGuardado = trim((string) ($data['estado'] ?? ''));
+            if ($estadoGuardado === '') {
+                $estadoGuardado = 'ACTIVA';
+            }
+            if (in_array($scenario, ['NORMALIDAD', 'AVISO'], true)) {
+                $estadoGuardado = 'FINALIZADA';
             }
 
             if ($scenario === 'ACTIVACION') {
@@ -172,7 +184,7 @@ class ActivationController extends Controller
                 'ac_de_pl-cargo_declarado' => $data['cargo_declarado'] ?? null,
                 'ac_de_pl-fecha_activac' => $data['fecha_activac'],
                 'ac_de_pl-hora_activac' => $data['hora_activac'],
-                'ac_de_pl-estado' => $data['estado'],
+                'ac_de_pl-estado' => $estadoGuardado,
                 'ac_de_pl-mensaje_inic' => $data['mensaje_inic'] ?? null,
                 'ac_de_pl-mensaje_simul' => $data['mensaje_simul'] ?? null,
                 'ac_de_pl-observ' => $data['observ'] ?? null,
@@ -212,7 +224,7 @@ class ActivationController extends Controller
                     'ti_em_id' => $data['ti_em_id'],
                     'rie_id' => $data['rie_id'],
                     'ni_al_id' => $data['ni_al_id'],
-                    'estado' => $data['estado'],
+                    'estado' => $estadoGuardado,
                     'scenario' => $scenario,
                 ],
             ]);
