@@ -3616,74 +3616,46 @@ class ActivationController extends Controller
                 ->all();
         }
         $nivelIds = [];
+        $nivelIdsOrdered = [];
         foreach ($nivelRows as $n) {
             $nid = trim((string) ($n->{'ac_ni_hi-ni_al_id-fk'} ?? ''));
-            if ($nid !== '') {
+            if ($nid !== '' && ! isset($nivelIds[$nid])) {
                 $nivelIds[$nid] = true;
+                $nivelIdsOrdered[] = $nid;
             }
         }
         $nivelInicialId = trim((string) ($activationRow?->{'ac_de_pl-ni_al_id-fk-inicial'} ?? ''));
-        if ($nivelInicialId !== '') {
+        if ($nivelInicialId !== '' && ! isset($nivelIds[$nivelInicialId])) {
             $nivelIds[$nivelInicialId] = true;
-        }
-
-        $bestMappingByNivelId = [];
-        if ($riesgoId !== '' && ! empty($nivelIds) && Schema::hasTable('riesgo_nivel_accion_set_cfg')) {
-            $mappings = DB::table('riesgo_nivel_accion_set_cfg')
-                ->when(
-                    Schema::hasColumn('riesgo_nivel_accion_set_cfg', 'ri_ni_ac_se-tenant_id'),
-                    static fn ($q) => $q->where('ri_ni_ac_se-tenant_id', $tenantId),
-                )
-                ->where('ri_ni_ac_se-rie_id-fk', $riesgoId)
-                ->whereIn('ri_ni_ac_se-ni_al_id-fk', array_keys($nivelIds))
-                ->get([
-                    'ri_ni_ac_se-ni_al_id-fk',
-                    'ri_ni_ac_se-ac_se_id-fk',
-                    'ri_ni_ac_se-prioridad',
-                    'ri_ni_ac_se-activo',
-                ]);
-            $groupedMappings = [];
-            foreach ($mappings as $m) {
-                $nid = trim((string) ($m->{'ri_ni_ac_se-ni_al_id-fk'} ?? ''));
-                if ($nid === '') {
-                    continue;
-                }
-                $groupedMappings[$nid][] = $m;
-            }
-            foreach ($groupedMappings as $nid => $items) {
-                usort($items, static function ($a, $b): int {
-                    $pa = (int) ($a->{'ri_ni_ac_se-prioridad'} ?? 9999);
-                    $pb = (int) ($b->{'ri_ni_ac_se-prioridad'} ?? 9999);
-
-                    return $pa <=> $pb;
-                });
-                $selected = null;
-                foreach ($items as $item) {
-                    $activo = strtoupper(trim((string) ($item->{'ri_ni_ac_se-activo'} ?? 'SI')));
-                    if ($activo !== 'NO') {
-                        $selected = $item;
-                        break;
-                    }
-                }
-                $bestMappingByNivelId[$nid] = $selected ?? ($items[0] ?? null);
-            }
+            $nivelIdsOrdered[] = $nivelInicialId;
         }
 
         $actionSetIds = [];
         foreach ($nivelRows as $n) {
             $setId = trim((string) ($n->{'ac_ni_hi-ac_se_id-fk'} ?? ''));
             $nid = trim((string) ($n->{'ac_ni_hi-ni_al_id-fk'} ?? ''));
-            if ($setId === '' && $nid !== '') {
-                $setId = trim((string) ($bestMappingByNivelId[$nid]?->{'ri_ni_ac_se-ac_se_id-fk'} ?? ''));
-            }
             if ($setId !== '') {
                 $actionSetIds[$setId] = true;
+                continue;
+            }
+            if ($riesgoId !== '' && $nid !== '') {
+                foreach ($this->getActionSets($tenantId, $riesgoId, $nid) as $candidateSetId) {
+                    $candidateSetId = trim((string) $candidateSetId);
+                    if ($candidateSetId !== '') {
+                        $actionSetIds[$candidateSetId] = true;
+                    }
+                }
             }
         }
-        if ($nivelInicialId !== '' && isset($bestMappingByNivelId[$nivelInicialId])) {
-            $initialSetId = trim((string) ($bestMappingByNivelId[$nivelInicialId]?->{'ri_ni_ac_se-ac_se_id-fk'} ?? ''));
-            if ($initialSetId !== '') {
-                $actionSetIds[$initialSetId] = true;
+
+        if ($riesgoId !== '') {
+            foreach ($nivelIdsOrdered as $nivelIdCandidate) {
+                foreach ($this->getActionSets($tenantId, $riesgoId, $nivelIdCandidate) as $candidateSetId) {
+                    $candidateSetId = trim((string) $candidateSetId);
+                    if ($candidateSetId !== '') {
+                        $actionSetIds[$candidateSetId] = true;
+                    }
+                }
             }
         }
 
