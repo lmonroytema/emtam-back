@@ -374,10 +374,13 @@ class ActivationController extends Controller
                         $grOpIdStr = trim((string) ($dest->{'pe_ro_gr-gr_op_id-fk'} ?? ''));
                         $tipoAsign = strtoupper(trim((string) ($dest->{'pe_ro_gr-tipo_asignacion'} ?? '')));
                         if ($tipoAsign === '') {
-                            $tipoAsign = 'TITULAR';
+                            $tipoAsign = 'SUPLENTE';
                         }
-                        if (! in_array($tipoAsign, ['TITULAR', 'LIDER'], true)) {
+                        if (! in_array($tipoAsign, ['TITULAR', 'SUPLENTE', 'LIDER'], true)) {
                             continue;
+                        }
+                        if ($tipoAsign === 'LIDER') {
+                            $tipoAsign = 'TITULAR';
                         }
                         $rowsByGroup[$grOpIdStr][] = [
                             'per_id' => $perId,
@@ -387,61 +390,17 @@ class ActivationController extends Controller
                             'row_id' => (string) ($dest->{'pe_ro_gr-id'} ?? ''),
                         ];
                     }
-
-                    $groupIds = array_keys($rowsByGroup);
-                    $hasMultipleGroups = count($groupIds) > 1;
-                    $leaderCandidates = [];
                     foreach ($rowsByGroup as $groupRows) {
                         foreach ($groupRows as $row) {
-                            if (($row['tipo_asignacion'] ?? '') !== 'LIDER') {
+                            $tipo = strtoupper(trim((string) ($row['tipo_asignacion'] ?? 'SUPLENTE')));
+                            if ($tipo !== 'TITULAR' && $tipo !== 'SUPLENTE') {
                                 continue;
                             }
-                            $leaderCandidates[] = $row;
-                        }
-                    }
-
-                    if ($hasMultipleGroups) {
-                        if (! empty($leaderCandidates)) {
-                            usort($leaderCandidates, static function ($a, $b) {
-                                $ao = (int) ($a['order'] ?? 999);
-                                $bo = (int) ($b['order'] ?? 999);
-                                if ($ao !== $bo) {
-                                    return $ao <=> $bo;
-                                }
-                                return strcmp((string) ($a['row_id'] ?? ''), (string) ($b['row_id'] ?? ''));
-                            });
-                            $selectedLeader = $leaderCandidates[0];
                             $recipients[] = [
-                                'per_id' => (string) ($selectedLeader['per_id'] ?? ''),
-                                'gr_op_id' => $selectedLeader['gr_op_id'] ?? null,
-                                'tipo_asignacion' => 'TITULAR',
+                                'per_id' => (string) ($row['per_id'] ?? ''),
+                                'gr_op_id' => $row['gr_op_id'] ?? null,
+                                'tipo_asignacion' => $tipo,
                             ];
-                        } else {
-                            foreach ($rowsByGroup as $groupRows) {
-                                foreach ($groupRows as $row) {
-                                    if (($row['tipo_asignacion'] ?? '') !== 'TITULAR') {
-                                        continue;
-                                    }
-                                    $recipients[] = [
-                                        'per_id' => (string) ($row['per_id'] ?? ''),
-                                        'gr_op_id' => $row['gr_op_id'] ?? null,
-                                        'tipo_asignacion' => 'TITULAR',
-                                    ];
-                                }
-                            }
-                        }
-                    } else {
-                        foreach ($rowsByGroup as $groupRows) {
-                            foreach ($groupRows as $row) {
-                                if (($row['tipo_asignacion'] ?? '') !== 'TITULAR') {
-                                    continue;
-                                }
-                                $recipients[] = [
-                                    'per_id' => (string) ($row['per_id'] ?? ''),
-                                    'gr_op_id' => $row['gr_op_id'] ?? null,
-                                    'tipo_asignacion' => 'TITULAR',
-                                ];
-                            }
                         }
                     }
                 }
@@ -739,6 +698,56 @@ class ActivationController extends Controller
                 }
                 foreach (($actionsByRole[$rolId] ?? []) as $actionPayload) {
                     $appendAction($byPerson[$perId], $actionPayload);
+                }
+            }
+        }
+
+        if ($productionMode && empty($targetEmails) && Schema::hasTable('persona_mst')) {
+            $allPeopleRows = DB::table('persona_mst')
+                ->when(
+                    Schema::hasColumn('persona_mst', 'per-tenant_id'),
+                    static fn ($q) => $q->where('per-tenant_id', $tenantId),
+                )
+                ->when(
+                    Schema::hasColumn('persona_mst', 'per-activo'),
+                    static fn ($q) => $q->whereRaw("UPPER(COALESCE(`per-activo`, 'SI')) <> 'NO'"),
+                )
+                ->get([
+                    'per-id as per_id',
+                    'per-email as email',
+                    'per-tel_mov as tel_mov',
+                    'per-nombre as nombre',
+                    'per-apellido_1 as apellido_1',
+                    'per-apellido_2 as apellido_2',
+                ]);
+            foreach ($allPeopleRows as $ap) {
+                $perId = trim((string) ($ap->per_id ?? ''));
+                if ($perId === '') {
+                    continue;
+                }
+                $email = strtolower(trim((string) ($ap->email ?? '')));
+                $telMov = trim((string) ($ap->tel_mov ?? ''));
+                $nombre = trim(implode(' ', array_filter([
+                    (string) ($ap->nombre ?? ''),
+                    (string) ($ap->apellido_1 ?? ''),
+                    (string) ($ap->apellido_2 ?? ''),
+                ])));
+                $byPerson[$perId] ??= [
+                    'per_id' => $perId,
+                    'email' => $email !== '' ? $email : null,
+                    'tel_mov' => $telMov !== '' ? $telMov : null,
+                    'nombre' => $nombre !== '' ? $nombre : $perId,
+                    'acciones' => [],
+                    'acciones_index' => [],
+                ];
+                if (($byPerson[$perId]['email'] ?? null) === null && $email !== '') {
+                    $byPerson[$perId]['email'] = $email;
+                }
+                if (($byPerson[$perId]['tel_mov'] ?? null) === null && $telMov !== '') {
+                    $byPerson[$perId]['tel_mov'] = $telMov;
+                }
+                if (($byPerson[$perId]['nombre'] ?? '') === $perId && $nombre !== '') {
+                    $byPerson[$perId]['nombre'] = $nombre;
                 }
             }
         }
@@ -4420,6 +4429,52 @@ class ActivationController extends Controller
                 'created_at' => now()->toDateTimeString(),
             ],
         );
+
+        $tenantLang = strtolower(trim((string) (Tenant::query()->where('tenant_id', $tenantId)->value('default_language') ?? 'es')));
+        if (! in_array($tenantLang, ['es', 'ca', 'en'], true)) {
+            $tenantLang = 'es';
+        }
+        $subjectByLang = [
+            'es' => 'Acceso al panel de control compartido',
+            'ca' => 'Accés al panell de control compartit',
+            'en' => 'Shared control panel access',
+        ];
+        $line1ByLang = [
+            'es' => "Se te ha concedido acceso al panel de control para la activación {$activationId}.",
+            'ca' => "Se t'ha concedit accés al panell de control per a l'activació {$activationId}.",
+            'en' => "You have been granted access to the control panel for activation {$activationId}.",
+        ];
+        $line2ByLang = [
+            'es' => "Vence: {$expiresAt}",
+            'ca' => "Caduca: {$expiresAt}",
+            'en' => "Expires: {$expiresAt}",
+        ];
+        $line3ByLang = [
+            'es' => 'Inicia sesión para acceder al panel.',
+            'ca' => 'Inicia sessió per accedir al panell.',
+            'en' => 'Sign in to access the panel.',
+        ];
+        if (is_string($targetUser->email) && trim($targetUser->email) !== '') {
+            try {
+                Mail::raw(
+                    implode("\n\n", [
+                        $line1ByLang[$tenantLang],
+                        $line2ByLang[$tenantLang],
+                        $line3ByLang[$tenantLang],
+                    ]),
+                    static function ($message) use ($targetUser, $subjectByLang, $tenantLang): void {
+                        $message->to($targetUser->email)->subject($subjectByLang[$tenantLang]);
+                    }
+                );
+            } catch (\Throwable $e) {
+                Log::warning('control_panel_share_email_failed', [
+                    'tenant_id' => $tenantId,
+                    'activation_id' => $activationId,
+                    'user_id' => $targetUser->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
 
         return response()->json([
             'message' => 'Access granted.',

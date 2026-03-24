@@ -35,6 +35,7 @@ class DatabaseSeeder extends Seeder
 
         $this->call(ExcelSeeder::class);
         $this->call(DirectorioTelefonicoSeeder::class);
+        $this->call(DirectorioDinamicoSeeder::class);
         $this->call(EvLugarCoordsCsvSeeder::class);
 
         $directorEmail = 'director@morell.test';
