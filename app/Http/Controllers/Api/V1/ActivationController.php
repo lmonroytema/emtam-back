@@ -1760,7 +1760,7 @@ class ActivationController extends Controller
             if ($tipo) {
                 $cod = trim((string) ($tipo->{'ti_em-cod'} ?? ''));
                 $nombre = trim((string) ($tipo->{'ti_em-nombre'} ?? ''));
-                $tipoLabel = trim(implode(' — ', array_filter([$cod, $nombre]))) ?: $tiEmId;
+                $tipoLabel = $nombre !== '' ? $nombre : ($cod !== '' ? $cod : $tiEmId);
             }
         }
 
@@ -1776,12 +1776,13 @@ class ActivationController extends Controller
             if ($riesgo) {
                 $cod = trim((string) ($riesgo->{'rie-cod'} ?? ''));
                 $nombre = trim((string) ($riesgo->{'rie-nombre'} ?? ''));
-                $riesgoLabel = trim(implode(' — ', array_filter([$cod, $nombre]))) ?: $rieId;
+                $riesgoLabel = $nombre !== '' ? $nombre : ($cod !== '' ? $cod : $rieId);
             }
         }
 
         $nivelLabel = $nivelId;
         $nivelCod = '';
+        $nivelNombre = '';
         if ($nivelId !== '' && Schema::hasTable('nivel_alerta_cat')) {
             $nivel = DB::table('nivel_alerta_cat')
                 ->when(
@@ -1792,12 +1793,12 @@ class ActivationController extends Controller
                 ->first();
             if ($nivel) {
                 $nivelCod = strtoupper(trim((string) ($nivel->{'ni_al-cod'} ?? '')));
-                $nombre = trim((string) ($nivel->{'ni_al-nombre'} ?? ''));
-                $nivelLabel = trim(implode(' — ', array_filter([$nivelCod, $nombre]))) ?: $nivelId;
+                $nivelNombre = trim((string) ($nivel->{'ni_al-nombre'} ?? ''));
+                $nivelLabel = $nivelNombre !== '' ? $nivelNombre : ($nivelCod !== '' ? $nivelCod : $nivelId);
             }
         }
 
-        $nivelUpper = strtoupper((string) $nivelLabel);
+        $nivelUpper = strtoupper($nivelNombre !== '' ? $nivelNombre : (string) $nivelLabel);
         $isAviso = $nivelUpper !== '' && (str_contains($nivelUpper, 'AVISO') || $nivelCod === 'AVISO' || $nivelCod === 'AV' || str_starts_with($nivelCod, 'AV'));
         $isPrealerta = $nivelUpper !== '' && (str_contains($nivelUpper, 'PREALERTA') || str_starts_with($nivelCod, 'P'));
         $scenarioLabel = $isPrealerta ? 'Prealerta' : ($isAviso ? 'Aviso' : 'Resumen');
