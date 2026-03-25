@@ -3614,15 +3614,23 @@ class ActivationController extends Controller
 
         $nivelRows = [];
         if (Schema::hasTable('activacion_nivel_hist_trs')) {
-            $nivelRows = DB::table('activacion_nivel_hist_trs')
+            $hasNivelOrden = Schema::hasColumn('activacion_nivel_hist_trs', 'ac_ni_hi-orden');
+            $nivelQuery = DB::table('activacion_nivel_hist_trs')
                 ->when(
                     Schema::hasColumn('activacion_nivel_hist_trs', 'ac_ni_hi-tenant_id'),
                     static fn ($q) => $q->where('ac_ni_hi-tenant_id', $tenantId),
                 )
-                ->where('ac_ni_hi-ac_de_pl_id-fk', $activationId)
-                ->orderByRaw("CAST(COALESCE(`ac_ni_hi-orden`, '0') AS UNSIGNED) ASC")
-                ->get(['ac_ni_hi-ni_al_id-fk', 'ac_ni_hi-ac_se_id-fk', 'ac_ni_hi-orden'])
-                ->all();
+                ->where('ac_ni_hi-ac_de_pl_id-fk', $activationId);
+            if ($hasNivelOrden) {
+                $nivelQuery->orderByRaw("CAST(COALESCE(`ac_ni_hi-orden`, '0') AS UNSIGNED) ASC");
+            } else {
+                $nivelQuery->orderBy('ac_ni_hi-ni_al_id-fk', 'asc');
+            }
+            $nivelSelect = ['ac_ni_hi-ni_al_id-fk', 'ac_ni_hi-ac_se_id-fk'];
+            if ($hasNivelOrden) {
+                $nivelSelect[] = 'ac_ni_hi-orden';
+            }
+            $nivelRows = $nivelQuery->get($nivelSelect)->all();
         }
         $nivelIds = [];
         $nivelIdsOrdered = [];
@@ -3692,17 +3700,19 @@ class ActivationController extends Controller
         }
 
         if (! empty($actionSetIds) && Schema::hasTable('accion_set_detalle_cfg')) {
-            $detallesPorSet = DB::table('accion_set_detalle_cfg')
+            $detallesPorSetQuery = DB::table('accion_set_detalle_cfg')
                 ->when(
                     Schema::hasColumn('accion_set_detalle_cfg', 'ac_se_de-tenant_id'),
                     static fn ($q) => $q->where('ac_se_de-tenant_id', $tenantId),
                 )
-                ->whereIn('ac_se_de-ac_se_id-fk', array_keys($actionSetIds))
-                ->where(function ($q) {
+                ->whereIn('ac_se_de-ac_se_id-fk', array_keys($actionSetIds));
+            if (Schema::hasColumn('accion_set_detalle_cfg', 'ac_se_de-activo')) {
+                $detallesPorSetQuery->where(function ($q) {
                     $q->whereNull('ac_se_de-activo')
                         ->orWhereRaw("UPPER(TRIM(COALESCE(`ac_se_de-activo`, 'SI'))) <> 'NO'");
-                })
-                ->get(['ac_se_de-id']);
+                });
+            }
+            $detallesPorSet = $detallesPorSetQuery->get(['ac_se_de-id']);
             foreach ($detallesPorSet as $d) {
                 $did = trim((string) ($d->{'ac_se_de-id'} ?? ''));
                 if ($did !== '') {
@@ -3713,19 +3723,26 @@ class ActivationController extends Controller
 
         $detalleById = [];
         if (Schema::hasTable('accion_set_detalle_cfg') && ! empty($detalleIds)) {
+            $detalleColumns = ['ac_se_de-id'];
+            if (Schema::hasColumn('accion_set_detalle_cfg', 'ac_se_de-rol_id-fk')) {
+                $detalleColumns[] = 'ac_se_de-rol_id-fk';
+            }
+            if (Schema::hasColumn('accion_set_detalle_cfg', 'ac_se_de-ac_op_id-fk')) {
+                $detalleColumns[] = 'ac_se_de-ac_op_id-fk';
+            }
+            if (Schema::hasColumn('accion_set_detalle_cfg', 'ac_se_de-detalle')) {
+                $detalleColumns[] = 'ac_se_de-detalle';
+            }
+            if (Schema::hasColumn('accion_set_detalle_cfg', 'ac_se_de-ord_ejec')) {
+                $detalleColumns[] = 'ac_se_de-ord_ejec';
+            }
             $detalles = DB::table('accion_set_detalle_cfg')
                 ->when(
                     Schema::hasColumn('accion_set_detalle_cfg', 'ac_se_de-tenant_id'),
                     static fn ($q) => $q->where('ac_se_de-tenant_id', $tenantId),
                 )
                 ->whereIn('ac_se_de-id', array_keys($detalleIds))
-                ->get([
-                    'ac_se_de-id',
-                    'ac_se_de-rol_id-fk',
-                    'ac_se_de-ac_op_id-fk',
-                    'ac_se_de-detalle',
-                    'ac_se_de-ord_ejec',
-                ]);
+                ->get($detalleColumns);
             foreach ($detalles as $d) {
                 $id = trim((string) ($d->{'ac_se_de-id'} ?? ''));
                 if ($id === '') {
@@ -3771,13 +3788,19 @@ class ActivationController extends Controller
 
         $personaById = [];
         if (Schema::hasTable('persona_mst') && ! empty($personaIds)) {
+            $personaColumns = ['per-id'];
+            foreach (['per-nombre', 'per-apellido_1', 'per-apellido_2', 'per-email'] as $col) {
+                if (Schema::hasColumn('persona_mst', $col)) {
+                    $personaColumns[] = $col;
+                }
+            }
             $personas = DB::table('persona_mst')
                 ->when(
                     Schema::hasColumn('persona_mst', 'per-tenant_id'),
                     static fn ($q) => $q->where('per-tenant_id', $tenantId),
                 )
                 ->whereIn('per-id', array_keys($personaIds))
-                ->get(['per-id', 'per-nombre', 'per-apellido_1', 'per-apellido_2', 'per-email']);
+                ->get($personaColumns);
             foreach ($personas as $p) {
                 $id = trim((string) ($p->{'per-id'} ?? ''));
                 if ($id === '') {
@@ -3824,41 +3847,52 @@ class ActivationController extends Controller
 
         $notificationTsByPersonaId = [];
         if (Schema::hasTable('notificacion_envio_trs')) {
-            $sent = DB::table('notificacion_envio_trs')
-                ->when(
-                    Schema::hasColumn('notificacion_envio_trs', 'no_en-tenant_id'),
-                    static fn ($q) => $q->where('no_en-tenant_id', $tenantId),
-                )
-                ->where('no_en-ac_de_pl_id-fk', $activationId)
-                ->whereNotNull('no_en-per_id-fk')
-                ->orderBy('no_en-ts', 'asc')
-                ->orderBy('no_en-id', 'asc')
-                ->get(['no_en-per_id-fk', 'no_en-ts']);
-            foreach ($sent as $n) {
-                $perId = trim((string) ($n->{'no_en-per_id-fk'} ?? ''));
-                $ts = trim((string) ($n->{'no_en-ts'} ?? ''));
-                if ($perId === '' || $ts === '') {
-                    continue;
+            $hasNotifPersona = Schema::hasColumn('notificacion_envio_trs', 'no_en-per_id-fk');
+            $hasNotifTs = Schema::hasColumn('notificacion_envio_trs', 'no_en-ts');
+            $hasNotifActivation = Schema::hasColumn('notificacion_envio_trs', 'no_en-ac_de_pl_id-fk');
+            if ($hasNotifPersona && $hasNotifTs && $hasNotifActivation) {
+                $sentQuery = DB::table('notificacion_envio_trs')
+                    ->when(
+                        Schema::hasColumn('notificacion_envio_trs', 'no_en-tenant_id'),
+                        static fn ($q) => $q->where('no_en-tenant_id', $tenantId),
+                    )
+                    ->where('no_en-ac_de_pl_id-fk', $activationId)
+                    ->whereNotNull('no_en-per_id-fk')
+                    ->orderBy('no_en-ts', 'asc');
+                if (Schema::hasColumn('notificacion_envio_trs', 'no_en-id')) {
+                    $sentQuery->orderBy('no_en-id', 'asc');
                 }
-                if (! array_key_exists($perId, $notificationTsByPersonaId)) {
-                    $notificationTsByPersonaId[$perId] = $ts;
+                $sent = $sentQuery->get(['no_en-per_id-fk', 'no_en-ts']);
+                foreach ($sent as $n) {
+                    $perId = trim((string) ($n->{'no_en-per_id-fk'} ?? ''));
+                    $ts = trim((string) ($n->{'no_en-ts'} ?? ''));
+                    if ($perId === '' || $ts === '') {
+                        continue;
+                    }
+                    if (! array_key_exists($perId, $notificationTsByPersonaId)) {
+                        $notificationTsByPersonaId[$perId] = $ts;
+                    }
                 }
             }
         }
 
         $rolToGrupoId = [];
         if (Schema::hasTable('persona_rol_grupo_cfg')) {
-            $rolGroupRows = DB::table('persona_rol_grupo_cfg')
+            $rolGroupQuery = DB::table('persona_rol_grupo_cfg')
                 ->when(
                     Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-tenant_id'),
                     static fn ($q) => $q->where('pe_ro_gr-tenant_id', $tenantId),
-                )
-                ->where(function ($q) {
+                );
+            if (Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-activo')) {
+                $rolGroupQuery->where(function ($q) {
                     $q->whereNull('pe_ro_gr-activo')
                         ->orWhereRaw("UPPER(TRIM(COALESCE(`pe_ro_gr-activo`, 'SI'))) <> 'NO'");
-                })
-                ->whereNull('pe_ro_gr-fech_fin')
-                ->get(['pe_ro_gr-rol_id-fk', 'pe_ro_gr-gr_op_id-fk']);
+                });
+            }
+            if (Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-fech_fin')) {
+                $rolGroupQuery->whereNull('pe_ro_gr-fech_fin');
+            }
+            $rolGroupRows = $rolGroupQuery->get(['pe_ro_gr-rol_id-fk', 'pe_ro_gr-gr_op_id-fk']);
             foreach ($rolGroupRows as $row) {
                 $rolId = trim((string) ($row->{'pe_ro_gr-rol_id-fk'} ?? ''));
                 $gid = trim((string) ($row->{'pe_ro_gr-gr_op_id-fk'} ?? ''));
