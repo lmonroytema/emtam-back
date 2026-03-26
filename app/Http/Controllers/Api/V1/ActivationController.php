@@ -391,17 +391,46 @@ class ActivationController extends Controller
                         ];
                     }
                     foreach ($rowsByGroup as $groupRows) {
+                        $titulares = [];
+                        $suplentes = [];
                         foreach ($groupRows as $row) {
                             $tipo = strtoupper(trim((string) ($row['tipo_asignacion'] ?? 'SUPLENTE')));
-                            if ($tipo !== 'TITULAR' && $tipo !== 'SUPLENTE') {
+                            if ($tipo === 'TITULAR') {
+                                $titulares[] = $row;
                                 continue;
                             }
-                            $recipients[] = [
-                                'per_id' => (string) ($row['per_id'] ?? ''),
-                                'gr_op_id' => $row['gr_op_id'] ?? null,
-                                'tipo_asignacion' => $tipo,
-                            ];
+                            if ($tipo === 'SUPLENTE') {
+                                $suplentes[] = $row;
+                            }
                         }
+                        usort($titulares, static function (array $a, array $b): int {
+                            $ao = (int) ($a['order'] ?? 999);
+                            $bo = (int) ($b['order'] ?? 999);
+                            if ($ao !== $bo) {
+                                return $ao <=> $bo;
+                            }
+
+                            return strcmp((string) ($a['row_id'] ?? ''), (string) ($b['row_id'] ?? ''));
+                        });
+                        usort($suplentes, static function (array $a, array $b): int {
+                            $ao = (int) ($a['order'] ?? 999);
+                            $bo = (int) ($b['order'] ?? 999);
+                            if ($ao !== $bo) {
+                                return $ao <=> $bo;
+                            }
+
+                            return strcmp((string) ($a['row_id'] ?? ''), (string) ($b['row_id'] ?? ''));
+                        });
+                        $selected = $titulares[0] ?? $suplentes[0] ?? null;
+                        if ($selected === null) {
+                            continue;
+                        }
+                        $selectedTipo = strtoupper(trim((string) ($selected['tipo_asignacion'] ?? 'SUPLENTE')));
+                        $recipients[] = [
+                            'per_id' => (string) ($selected['per_id'] ?? ''),
+                            'gr_op_id' => $selected['gr_op_id'] ?? null,
+                            'tipo_asignacion' => $selectedTipo === 'TITULAR' ? 'TITULAR' : 'SUPLENTE',
+                        ];
                     }
                 }
 
