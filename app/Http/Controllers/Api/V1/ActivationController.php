@@ -3439,6 +3439,8 @@ class ActivationController extends Controller
 
             $createdCount = 0;
             if ($actionSetId && Schema::hasTable('accion_set_detalle_cfg')) {
+                $personaRolGrupoByRol = [];
+                $asignacionByKey = [];
                 $detalles = DB::table('accion_set_detalle_cfg')
                     ->when(
                         Schema::hasColumn('accion_set_detalle_cfg', 'ac_se_de-tenant_id'),
@@ -3451,49 +3453,121 @@ class ActivationController extends Controller
                     ->get();
 
                 foreach ($detalles as $detalle) {
-                    $detalleId = $detalle->{'ac_se_de-id'};
+                    $detalleId = trim((string) ($detalle->{'ac_se_de-id'} ?? ''));
+                    if ($detalleId === '') {
+                        continue;
+                    }
+                    $rolIdStr = trim((string) ($detalle->{'ac_se_de-rol_id-fk'} ?? ''));
                     $grOpId = trim((string) ($detalle->{'ac_se_de-gr_op_id-fk'} ?? ''));
+                    $resolvedGroupId = $grOpId !== '' ? $grOpId : null;
+                    $defaultPerId = null;
+                    $defaultTipoAsignacion = 'TITULAR';
+
+                    if ($rolIdStr !== '' && Schema::hasTable('persona_rol_grupo_cfg')) {
+                        if (! array_key_exists($rolIdStr, $personaRolGrupoByRol)) {
+                            $query = DB::table('persona_rol_grupo_cfg')
+                                ->when(
+                                    Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-tenant_id'),
+                                    static fn ($q) => $q->where('pe_ro_gr-tenant_id', $tenantId),
+                                )
+                                ->where('pe_ro_gr-rol_id-fk', $rolIdStr);
+                            if (Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-activo')) {
+                                $query->whereRaw("UPPER(COALESCE(`pe_ro_gr-activo`, 'SI')) <> 'NO'");
+                            }
+                            if (Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-fech_fin')) {
+                                $query->whereNull('pe_ro_gr-fech_fin');
+                            }
+                            $personaRolGrupoByRol[$rolIdStr] = $query->get();
+                        }
+                        $candidates = [];
+                        foreach ($personaRolGrupoByRol[$rolIdStr] as $row) {
+                            $perId = trim((string) ($row->{'pe_ro_gr-per_id-fk'} ?? ''));
+                            if ($perId === '') {
+                                continue;
+                            }
+                            $candidateGroupId = trim((string) ($row->{'pe_ro_gr-gr_op_id-fk'} ?? ''));
+                            if ($resolvedGroupId !== null && $candidateGroupId !== '' && $candidateGroupId !== $resolvedGroupId) {
+                                continue;
+                            }
+                            $tipo = strtoupper(trim((string) ($row->{'pe_ro_gr-tipo_asignacion'} ?? 'SUPLENTE')));
+                            if ($tipo === 'LIDER') {
+                                $tipo = 'TITULAR';
+                            }
+                            if ($tipo !== 'TITULAR' && $tipo !== 'SUPLENTE') {
+                                continue;
+                            }
+                            $candidates[] = [
+                                'per_id' => $perId,
+                                'gr_op_id' => $candidateGroupId !== '' ? $candidateGroupId : null,
+                                'tipo_asignacion' => $tipo,
+                                'rank' => $tipo === 'TITULAR' ? 0 : 1,
+                                'order' => (int) trim((string) ($row->{'pe_ro_gr-orden_sust'} ?? '999')),
+                                'row_id' => trim((string) ($row->{'pe_ro_gr-id'} ?? '')),
+                            ];
+                        }
+                        usort($candidates, static function (array $a, array $b): int {
+                            $ar = (int) ($a['rank'] ?? 99);
+                            $br = (int) ($b['rank'] ?? 99);
+                            if ($ar !== $br) {
+                                return $ar <=> $br;
+                            }
+                            $ao = (int) ($a['order'] ?? 999);
+                            $bo = (int) ($b['order'] ?? 999);
+                            if ($ao !== $bo) {
+                                return $ao <=> $bo;
+                            }
+
+                            return strcmp((string) ($a['row_id'] ?? ''), (string) ($b['row_id'] ?? ''));
+                        });
+                        $selected = $candidates[0] ?? null;
+                        if ($selected !== null) {
+                            $defaultPerId = (string) ($selected['per_id'] ?? '');
+                            $defaultTipoAsignacion = strtoupper(trim((string) ($selected['tipo_asignacion'] ?? 'TITULAR')));
+                            $selectedGroupId = trim((string) ($selected['gr_op_id'] ?? ''));
+                            if ($resolvedGroupId === null && $selectedGroupId !== '') {
+                                $resolvedGroupId = $selectedGroupId;
+                            }
+                        }
+                    }
 
                     $asignacionId = null;
                     if (Schema::hasTable('asignacion_en_funciones_trs')) {
-                        $existingAsign = DB::table('asignacion_en_funciones_trs')
-                            ->when(
-                                Schema::hasColumn('asignacion_en_funciones_trs', 'as_en_fu-tenant_id'),
-                                static fn ($q) => $q->where('as_en_fu-tenant_id', $tenantId),
-                            )
-                            ->where('as_en_fu-ac_de_pl_id-fk', $activationId)
-                            ->where('as_en_fu-gr_op_id-fk', $grOpId)
-                            ->orderBy('as_en_fu-ts_ini', 'desc')
-                            ->first();
+                        $assignmentKey = trim((string) $defaultPerId).'|'.trim((string) ($resolvedGroupId ?? '')).'|'.trim((string) $defaultTipoAsignacion);
+                        if ($defaultPerId !== null && $defaultPerId !== '' && isset($asignacionByKey[$assignmentKey])) {
+                            $asignacionId = $asignacionByKey[$assignmentKey];
+                        }
+                        if ($asignacionId === null) {
+                            $existingAsign = DB::table('asignacion_en_funciones_trs')
+                                ->when(
+                                    Schema::hasColumn('asignacion_en_funciones_trs', 'as_en_fu-tenant_id'),
+                                    static fn ($q) => $q->where('as_en_fu-tenant_id', $tenantId),
+                                )
+                                ->where('as_en_fu-ac_de_pl_id-fk', $activationId)
+                                ->when($resolvedGroupId !== null, static fn ($q) => $q->where('as_en_fu-gr_op_id-fk', $resolvedGroupId))
+                                ->when($defaultPerId !== null && $defaultPerId !== '', static fn ($q) => $q->where('as_en_fu-per_id-fk', $defaultPerId))
+                                ->when($defaultTipoAsignacion !== '', static fn ($q) => $q->where('as_en_fu-tipo_asignacion', $defaultTipoAsignacion))
+                                ->orderBy('as_en_fu-ts_ini', 'desc')
+                                ->first();
 
-                        if ($existingAsign) {
-                            $asignacionId = $existingAsign->{'as_en_fu-id'};
-                        } else {
-                            $defaultPerId = null;
-                            if (Schema::hasTable('persona_rol_grupo_cfg')) {
-                                $default = DB::table('persona_rol_grupo_cfg')
-                                    ->when(
-                                        Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-tenant_id'),
-                                        static fn ($q) => $q->where('pe_ro_gr-tenant_id', $tenantId),
-                                    )
-                                    ->where('pe_ro_gr-gr_op_id-fk', $grOpId)
-                                    ->whereRaw("UPPER(COALESCE(`pe_ro_gr-activo`, 'SI')) <> 'NO'")
-                                    ->first();
-                                $defaultPerId = $default ? $default->{'pe_ro_gr-per_id-fk'} : null;
+                            if ($existingAsign) {
+                                $asignacionId = $existingAsign->{'as_en_fu-id'};
+                            } else {
+                                $asignacionId = 'ASEF-'.Str::uuid()->toString();
+                                DB::table('asignacion_en_funciones_trs')->insert([
+                                    'as_en_fu-id' => $asignacionId,
+                                    'as_en_fu-tenant_id' => $tenantId,
+                                    'as_en_fu-ac_de_pl_id-fk' => $activationId,
+                                    'as_en_fu-gr_op_id-fk' => $resolvedGroupId,
+                                    'as_en_fu-per_id-fk' => $defaultPerId,
+                                    'as_en_fu-tipo_asignacion' => $defaultTipoAsignacion !== '' ? $defaultTipoAsignacion : 'TITULAR',
+                                    'as_en_fu-motivo' => 'GENERACION_AUTOMATICA_CAMBIO_NIVEL',
+                                    'as_en_fu-ts_ini' => now()->toDateTimeString(),
+                                    'as_en_fu-estado' => 'ACTIVA',
+                                ]);
                             }
-
-                            $asignacionId = 'ASEF-'.Str::uuid()->toString();
-                            DB::table('asignacion_en_funciones_trs')->insert([
-                                'as_en_fu-id' => $asignacionId,
-                                'as_en_fu-tenant_id' => $tenantId,
-                                'as_en_fu-ac_de_pl_id-fk' => $activationId,
-                                'as_en_fu-gr_op_id-fk' => $grOpId,
-                                'as_en_fu-per_id-fk' => $defaultPerId,
-                                'as_en_fu-tipo_asignacion' => 'TITULAR',
-                                'as_en_fu-motivo' => 'GENERACION_AUTOMATICA_CAMBIO_NIVEL',
-                                'as_en_fu-ts_ini' => now()->toDateTimeString(),
-                                'as_en_fu-estado' => 'ACTIVA',
-                            ]);
+                            if ($defaultPerId !== null && $defaultPerId !== '') {
+                                $asignacionByKey[$assignmentKey] = $asignacionId;
+                            }
                         }
                     }
 
@@ -3502,7 +3576,7 @@ class ActivationController extends Controller
                             'ej_ac-id' => 'EJAC-'.Str::uuid()->toString(),
                             'ej_ac-tenant_id' => $tenantId,
                             'ej_ac-ac_de_pl_id-fk' => $activationId,
-                            'ej_ac-gr_op_id-fk' => $grOpId,
+                            'ej_ac-gr_op_id-fk' => $resolvedGroupId,
                             'ej_ac-ac_se_de_id-fk' => $detalleId,
                             'ej_ac-as_en_fu_id-fk' => $asignacionId,
                             'ej_ac-estado' => 'PENDIENTE',
