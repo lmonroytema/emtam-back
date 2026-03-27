@@ -381,17 +381,15 @@ class ActivationController extends Controller
                             'gr_op_id' => $manualGrOpId,
                             'tipo_asignacion' => 'TITULAR',
                         ];
-                    }
-                    foreach (($manualAssignment['suplente_per_ids'] ?? []) as $sid) {
-                        $sidStr = trim((string) $sid);
-                        if ($sidStr === '') {
-                            continue;
+                    } else {
+                        $fallbackSuplente = trim((string) (($manualAssignment['suplente_per_ids'][0] ?? '')));
+                        if ($fallbackSuplente !== '') {
+                            $recipients[] = [
+                                'per_id' => $fallbackSuplente,
+                                'gr_op_id' => $manualGrOpId,
+                                'tipo_asignacion' => 'SUPLENTE',
+                            ];
                         }
-                        $recipients[] = [
-                            'per_id' => $sidStr,
-                            'gr_op_id' => $manualGrOpId,
-                            'tipo_asignacion' => 'SUPLENTE',
-                        ];
                     }
 
                 }
@@ -5294,7 +5292,6 @@ class ActivationController extends Controller
 
         $recipients = [];
         foreach ($groupsToProcess as $grId => $items) {
-            $allowLeaderAsTitular = $hasMultipleGroups && $selectedLeaderGroupId !== null && $grId === $selectedLeaderGroupId;
             usort($items, static function ($a, $b) {
                 $ao = (int) trim((string) ($a->{'pe_ro_gr-orden_sust'} ?? '999'));
                 $bo = (int) trim((string) ($b->{'pe_ro_gr-orden_sust'} ?? '999'));
@@ -5305,7 +5302,9 @@ class ActivationController extends Controller
                 return strcmp((string) ($a->{'pe_ro_gr-id'} ?? ''), (string) ($b->{'pe_ro_gr-id'} ?? ''));
             });
 
-            $titularAdded = false;
+            $titular = null;
+            $lider = null;
+            $suplente = null;
             foreach ($items as $d) {
                 $tipo = strtoupper(trim((string) ($d->{'pe_ro_gr-tipo_asignacion'} ?? '')));
                 if ($tipo !== '' && $tipo !== 'TITULAR' && $tipo !== 'SUPLENTE' && $tipo !== 'LIDER') {
@@ -5315,22 +5314,22 @@ class ActivationController extends Controller
                 if ($perId === '') {
                     continue;
                 }
-                if (($tipo === 'TITULAR' || ($allowLeaderAsTitular && $tipo === 'LIDER')) && ! $titularAdded) {
-                    $recipients[] = [
-                        'per_id' => $perId,
-                        'gr_op_id' => $grId !== '' ? $grId : null,
-                        'tipo_asignacion' => 'TITULAR',
-                    ];
-                    $titularAdded = true;
+                if ($tipo === 'TITULAR' && $titular === null) {
+                    $titular = ['per_id' => $perId, 'gr_op_id' => $grId !== '' ? $grId : null, 'tipo_asignacion' => 'TITULAR'];
                     continue;
                 }
-                if ($tipo === 'SUPLENTE' || $tipo === '') {
-                    $recipients[] = [
-                        'per_id' => $perId,
-                        'gr_op_id' => $grId !== '' ? $grId : null,
-                        'tipo_asignacion' => 'SUPLENTE',
-                    ];
+                if ($tipo === 'LIDER' && $lider === null) {
+                    $lider = ['per_id' => $perId, 'gr_op_id' => $grId !== '' ? $grId : null, 'tipo_asignacion' => 'LIDER'];
+                    continue;
                 }
+                if (($tipo === 'SUPLENTE' || $tipo === '') && $suplente === null) {
+                    $suplente = ['per_id' => $perId, 'gr_op_id' => $grId !== '' ? $grId : null, 'tipo_asignacion' => 'SUPLENTE'];
+                }
+            }
+
+            $selected = $titular ?? $lider ?? $suplente;
+            if ($selected !== null) {
+                $recipients[] = $selected;
             }
         }
 
@@ -5342,7 +5341,7 @@ class ActivationController extends Controller
             if ($perId === '') {
                 continue;
             }
-            if ($tipo !== 'TITULAR') {
+            if ($tipo !== 'TITULAR' && $tipo !== 'LIDER') {
                 $tipo = 'SUPLENTE';
             }
             $key = $perId.'|'.$grOp.'|'.$tipo;
