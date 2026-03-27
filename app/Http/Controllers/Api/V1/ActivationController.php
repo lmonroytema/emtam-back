@@ -359,79 +359,16 @@ class ActivationController extends Controller
                 if ($rolIdStr !== '' && Schema::hasTable('persona_rol_grupo_cfg')) {
                     if (! array_key_exists($rolIdStr, $personaRolGrupoByRol)) {
                         $personaRolGrupoByRol[$rolIdStr] = DB::table('persona_rol_grupo_cfg')
+                            ->when(
+                                Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-tenant_id'),
+                                static fn ($q) => $q->where('pe_ro_gr-tenant_id', $tenantId),
+                            )
                             ->where('pe_ro_gr-rol_id-fk', $rolIdStr)
                             ->whereRaw("UPPER(COALESCE(`pe_ro_gr-activo`, 'SI')) <> 'NO'")
                             ->whereNull('pe_ro_gr-fech_fin')
                             ->get();
                     }
-
-                    $rowsByGroup = [];
-                    foreach ($personaRolGrupoByRol[$rolIdStr] as $dest) {
-                        $perId = trim((string) ($dest->{'pe_ro_gr-per_id-fk'} ?? ''));
-                        if ($perId === '') {
-                            continue;
-                        }
-                        $grOpIdStr = trim((string) ($dest->{'pe_ro_gr-gr_op_id-fk'} ?? ''));
-                        $tipoAsign = strtoupper(trim((string) ($dest->{'pe_ro_gr-tipo_asignacion'} ?? '')));
-                        if ($tipoAsign === '') {
-                            $tipoAsign = 'SUPLENTE';
-                        }
-                        if (! in_array($tipoAsign, ['TITULAR', 'SUPLENTE', 'LIDER'], true)) {
-                            continue;
-                        }
-                        if ($tipoAsign === 'LIDER') {
-                            $tipoAsign = 'TITULAR';
-                        }
-                        $rowsByGroup[$grOpIdStr][] = [
-                            'per_id' => $perId,
-                            'gr_op_id' => $grOpIdStr !== '' ? $grOpIdStr : null,
-                            'tipo_asignacion' => $tipoAsign,
-                            'order' => (int) trim((string) ($dest->{'pe_ro_gr-orden_sust'} ?? '999')),
-                            'row_id' => (string) ($dest->{'pe_ro_gr-id'} ?? ''),
-                        ];
-                    }
-                    foreach ($rowsByGroup as $groupRows) {
-                        $titulares = [];
-                        $suplentes = [];
-                        foreach ($groupRows as $row) {
-                            $tipo = strtoupper(trim((string) ($row['tipo_asignacion'] ?? 'SUPLENTE')));
-                            if ($tipo === 'TITULAR') {
-                                $titulares[] = $row;
-                                continue;
-                            }
-                            if ($tipo === 'SUPLENTE') {
-                                $suplentes[] = $row;
-                            }
-                        }
-                        usort($titulares, static function (array $a, array $b): int {
-                            $ao = (int) ($a['order'] ?? 999);
-                            $bo = (int) ($b['order'] ?? 999);
-                            if ($ao !== $bo) {
-                                return $ao <=> $bo;
-                            }
-
-                            return strcmp((string) ($a['row_id'] ?? ''), (string) ($b['row_id'] ?? ''));
-                        });
-                        usort($suplentes, static function (array $a, array $b): int {
-                            $ao = (int) ($a['order'] ?? 999);
-                            $bo = (int) ($b['order'] ?? 999);
-                            if ($ao !== $bo) {
-                                return $ao <=> $bo;
-                            }
-
-                            return strcmp((string) ($a['row_id'] ?? ''), (string) ($b['row_id'] ?? ''));
-                        });
-                        $selected = $titulares[0] ?? $suplentes[0] ?? null;
-                        if ($selected === null) {
-                            continue;
-                        }
-                        $selectedTipo = strtoupper(trim((string) ($selected['tipo_asignacion'] ?? 'SUPLENTE')));
-                        $recipients[] = [
-                            'per_id' => (string) ($selected['per_id'] ?? ''),
-                            'gr_op_id' => $selected['gr_op_id'] ?? null,
-                            'tipo_asignacion' => $selectedTipo === 'TITULAR' ? 'TITULAR' : 'SUPLENTE',
-                        ];
-                    }
+                    $recipients = $this->resolveRoleRecipientsForActivation($personaRolGrupoByRol[$rolIdStr]);
                 }
 
                 if (empty($recipients) && $manualAssignment !== null) {
@@ -443,6 +380,17 @@ class ActivationController extends Controller
                             'per_id' => $titularPerId,
                             'gr_op_id' => $manualGrOpId,
                             'tipo_asignacion' => 'TITULAR',
+                        ];
+                    }
+                    foreach (($manualAssignment['suplente_per_ids'] ?? []) as $sid) {
+                        $sidStr = trim((string) $sid);
+                        if ($sidStr === '') {
+                            continue;
+                        }
+                        $recipients[] = [
+                            'per_id' => $sidStr,
+                            'gr_op_id' => $manualGrOpId,
+                            'tipo_asignacion' => 'SUPLENTE',
                         ];
                     }
 
@@ -5298,6 +5246,114 @@ class ActivationController extends Controller
             },
             $filename,
         );
+    }
+
+    private function resolveRoleRecipientsForActivation(iterable $rawRows): array
+    {
+        $destinatariosByGrupo = [];
+        foreach ($rawRows as $row) {
+            $grId = trim((string) ($row->{'pe_ro_gr-gr_op_id-fk'} ?? ''));
+            $destinatariosByGrupo[$grId] ??= [];
+            $destinatariosByGrupo[$grId][] = $row;
+        }
+
+        $groupIds = array_keys($destinatariosByGrupo);
+        $hasMultipleGroups = count($groupIds) > 1;
+        $leaderCandidates = [];
+        foreach ($destinatariosByGrupo as $grId => $items) {
+            foreach ($items as $d) {
+                $tipo = strtoupper(trim((string) ($d->{'pe_ro_gr-tipo_asignacion'} ?? '')));
+                if ($tipo !== 'LIDER') {
+                    continue;
+                }
+                $leaderCandidates[] = [
+                    'group_id' => $grId,
+                    'order' => (int) trim((string) ($d->{'pe_ro_gr-orden_sust'} ?? '999')),
+                    'row_id' => (string) ($d->{'pe_ro_gr-id'} ?? ''),
+                ];
+            }
+        }
+        $selectedLeaderGroupId = null;
+        if ($hasMultipleGroups && ! empty($leaderCandidates)) {
+            usort($leaderCandidates, static function ($a, $b) {
+                $ao = (int) ($a['order'] ?? 999);
+                $bo = (int) ($b['order'] ?? 999);
+                if ($ao !== $bo) {
+                    return $ao <=> $bo;
+                }
+
+                return strcmp((string) ($a['row_id'] ?? ''), (string) ($b['row_id'] ?? ''));
+            });
+            $selectedLeaderGroupId = (string) ($leaderCandidates[0]['group_id'] ?? '');
+        }
+
+        $groupsToProcess = $destinatariosByGrupo;
+        if ($hasMultipleGroups && $selectedLeaderGroupId !== null && array_key_exists($selectedLeaderGroupId, $destinatariosByGrupo)) {
+            $groupsToProcess = [$selectedLeaderGroupId => $destinatariosByGrupo[$selectedLeaderGroupId]];
+        }
+
+        $recipients = [];
+        foreach ($groupsToProcess as $grId => $items) {
+            $allowLeaderAsTitular = $hasMultipleGroups && $selectedLeaderGroupId !== null && $grId === $selectedLeaderGroupId;
+            usort($items, static function ($a, $b) {
+                $ao = (int) trim((string) ($a->{'pe_ro_gr-orden_sust'} ?? '999'));
+                $bo = (int) trim((string) ($b->{'pe_ro_gr-orden_sust'} ?? '999'));
+                if ($ao !== $bo) {
+                    return $ao <=> $bo;
+                }
+
+                return strcmp((string) ($a->{'pe_ro_gr-id'} ?? ''), (string) ($b->{'pe_ro_gr-id'} ?? ''));
+            });
+
+            $titularAdded = false;
+            foreach ($items as $d) {
+                $tipo = strtoupper(trim((string) ($d->{'pe_ro_gr-tipo_asignacion'} ?? '')));
+                if ($tipo !== '' && $tipo !== 'TITULAR' && $tipo !== 'SUPLENTE' && $tipo !== 'LIDER') {
+                    continue;
+                }
+                $perId = trim((string) ($d->{'pe_ro_gr-per_id-fk'} ?? ''));
+                if ($perId === '') {
+                    continue;
+                }
+                if (($tipo === 'TITULAR' || ($allowLeaderAsTitular && $tipo === 'LIDER')) && ! $titularAdded) {
+                    $recipients[] = [
+                        'per_id' => $perId,
+                        'gr_op_id' => $grId !== '' ? $grId : null,
+                        'tipo_asignacion' => 'TITULAR',
+                    ];
+                    $titularAdded = true;
+                    continue;
+                }
+                if ($tipo === 'SUPLENTE' || $tipo === '') {
+                    $recipients[] = [
+                        'per_id' => $perId,
+                        'gr_op_id' => $grId !== '' ? $grId : null,
+                        'tipo_asignacion' => 'SUPLENTE',
+                    ];
+                }
+            }
+        }
+
+        $unique = [];
+        foreach ($recipients as $recipient) {
+            $perId = trim((string) ($recipient['per_id'] ?? ''));
+            $grOp = trim((string) ($recipient['gr_op_id'] ?? ''));
+            $tipo = strtoupper(trim((string) ($recipient['tipo_asignacion'] ?? 'SUPLENTE')));
+            if ($perId === '') {
+                continue;
+            }
+            if ($tipo !== 'TITULAR') {
+                $tipo = 'SUPLENTE';
+            }
+            $key = $perId.'|'.$grOp.'|'.$tipo;
+            $unique[$key] = [
+                'per_id' => $perId,
+                'gr_op_id' => $grOp !== '' ? $grOp : null,
+                'tipo_asignacion' => $tipo,
+            ];
+        }
+
+        return array_values($unique);
     }
 
     private function getActionSets(string $tenantId, string $riesgoId, string $nivelAlertaId): array
