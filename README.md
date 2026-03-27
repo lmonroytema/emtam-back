@@ -209,3 +209,70 @@ php artisan storage:link
 ```bash
 php artisan queue:work --daemon
 ```
+
+## WhatsApp + correo (Admin)
+
+El sistema permite seleccionar canal de notificación por tenant desde Admin:
+
+- `email`
+- `whatsapp`
+- `both`
+
+Campos de configuración:
+
+- `notifications_email_enabled`
+- `notifications_channel`
+- `notifications_production_mode`
+- `test_notification_emails`
+- `test_notification_whatsapp_numbers`
+
+### Variables `.env` para WhatsApp
+
+```env
+NOTIFICATIONS_WHATSAPP_PROVIDER=brevo
+BREVO_API_KEY=
+BREVO_WHATSAPP_SENDER=
+BREVO_WHATSAPP_API_URL=https://api.brevo.com/v3/whatsapp/sendMessage
+WHATSAPP_WEBHOOK_URL=
+```
+
+Valores posibles de `NOTIFICATIONS_WHATSAPP_PROVIDER`:
+
+- `brevo`: envío directo por API de Brevo WhatsApp.
+- `webhook`: envía a `WHATSAPP_WEBHOOK_URL` para integrar otro proveedor.
+- `none`: deshabilita WhatsApp sin tocar correo.
+
+## Hostinger + Brevo (plan básico)
+
+1) Subir backend y ejecutar migraciones:
+
+```bash
+php artisan migrate --force
+```
+
+2) Configurar `.env` de producción:
+
+- `APP_ENV=production`
+- `APP_DEBUG=false`
+- `APP_URL=https://tu-dominio`
+- `DB_*`, `MAIL_*`, `BREVO_API_KEY`, `NOTIFICATIONS_WHATSAPP_PROVIDER`, `BREVO_WHATSAPP_SENDER`
+
+3) Optimizar y cachear:
+
+```bash
+composer install --no-dev --optimize-autoloader
+php artisan config:cache
+php artisan route:cache
+php artisan view:cache
+```
+
+4) En Admin del tenant:
+
+- Seleccionar canal `email`, `whatsapp` o `both`.
+- En PRUEBA cargar correos y/o WhatsApp de prueba según canal.
+
+5) Requisitos Brevo para WhatsApp:
+
+- Número de remitente WhatsApp aprobado.
+- API key activa.
+- Si el plan no habilita WhatsApp API, usar `NOTIFICATIONS_WHATSAPP_PROVIDER=webhook` con un bridge externo.

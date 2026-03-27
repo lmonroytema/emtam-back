@@ -603,7 +603,9 @@ class ActivationController extends Controller
             ['name' => $tenantId, 'default_language' => 'es'],
         );
         $productionMode = (bool) ($tenant?->notifications_production_mode ?? false);
-        $emailNotificationsEnabled = (bool) ($tenant?->notifications_email_enabled ?? false);
+        $channels = $this->resolveNotificationChannels($tenant);
+        $emailNotificationsEnabled = (bool) ($channels['email_enabled'] ?? false);
+        $whatsappNotificationsEnabled = (bool) ($channels['whatsapp_enabled'] ?? false);
 
         $byPerson = [];
         $actionsByRole = [];
@@ -840,26 +842,7 @@ class ActivationController extends Controller
 
         $testWhatsappNumbers = [];
         if (! $productionMode) {
-            $raw = $tenant?->test_notification_whatsapp_numbers;
-            $rawArr = is_array($raw) ? $raw : [];
-            $numbers = [];
-            foreach ($rawArr as $n) {
-                $n = trim((string) $n);
-                if ($n === '') {
-                    continue;
-                }
-                $n = preg_replace('/[()\-\.\s]+/', '', $n) ?? '';
-                if (str_starts_with($n, '+')) {
-                    $digits = preg_replace('/\D+/', '', substr($n, 1)) ?? '';
-                    $n = $digits !== '' ? '+'.$digits : '';
-                } else {
-                    $n = preg_replace('/\D+/', '', $n) ?? '';
-                }
-                if ($n !== '') {
-                    $numbers[] = $n;
-                }
-            }
-            $testWhatsappNumbers = array_values(array_unique($numbers));
+            $testWhatsappNumbers = $this->parseWhatsappNumbers($tenant?->test_notification_whatsapp_numbers);
         }
 
         $mode = $this->resolveNotificationMode();
@@ -957,6 +940,9 @@ class ActivationController extends Controller
                 'tenant_id' => $tenantId,
                 'activation_id' => $activationId,
             ]);
+        }
+        if ($mode !== 'file' && ! $whatsappNotificationsEnabled) {
+            $warnings[] = 'Envío de WhatsApp desactivado en configuración del tenant.';
         }
 
         if ($mode === 'file') {
@@ -1465,6 +1451,66 @@ class ActivationController extends Controller
         }
 
         $whatsappTargets = [];
+        if ($productionMode) {
+            foreach ($people as $p) {
+                $phone = $this->normalizeWhatsappNumber((string) ($p['tel_mov'] ?? ''));
+                if ($phone === '') {
+                    continue;
+                }
+                $whatsappTargets[$phone] = [
+                    'per_id' => (string) ($p['per_id'] ?? ''),
+                    'nombre' => (string) ($p['nombre'] ?? ''),
+                    'phone' => $phone,
+                ];
+            }
+        } else {
+            foreach ($testWhatsappNumbers as $phone) {
+                $normalized = $this->normalizeWhatsappNumber((string) $phone);
+                if ($normalized === '') {
+                    continue;
+                }
+                $whatsappTargets[$normalized] = [
+                    'per_id' => null,
+                    'nombre' => 'TEST',
+                    'phone' => $normalized,
+                ];
+            }
+        }
+        $whatsappMessage = trim($emailBody);
+        if ($whatsappMessage !== '' && ! empty($whatsappTargets)) {
+            foreach ($whatsappTargets as $target) {
+                $phone = (string) ($target['phone'] ?? '');
+                if ($phone === '') {
+                    continue;
+                }
+                if ($mode === 'file') {
+                    $safe = preg_replace('/[^A-Za-z0-9._-]+/', '_', $phone) ?: 'whatsapp';
+                    $path = 'notifications_outbox/'.$tenantId.'/'.$activationId.'/'.$ts.'-whatsapp-'.$safe.'.txt';
+                    Storage::disk('local')->put($path, $whatsappMessage."\n");
+                    $whatsappFilesWritten++;
+                    continue;
+                }
+                if (! $whatsappNotificationsEnabled) {
+                    continue;
+                }
+                $wa = $this->sendWhatsappText($tenantId, $phone, $whatsappMessage, [
+                    'activation_id' => $activationId,
+                    'per_id' => $target['per_id'] ?? null,
+                    'nombre' => $target['nombre'] ?? null,
+                    'type' => 'activation',
+                ]);
+                if (($wa['sent'] ?? false) === true) {
+                    $whatsappSent++;
+                } else {
+                    $failedRecipients[] = [
+                        'per_id' => (string) ($target['per_id'] ?? ''),
+                        'email' => null,
+                        'phone' => $phone,
+                        'reason' => trim((string) ($wa['error'] ?? 'WhatsApp no enviado')),
+                    ];
+                }
+            }
+        }
 
         if ($mode === 'file') {
             $indexPath = 'notifications_outbox/'.$tenantId.'/'.$activationId.'/'.$ts.'-index.json';
@@ -1498,6 +1544,8 @@ class ActivationController extends Controller
                 'mailer' => $mailerName,
                 'smtp_configured' => $smtpConfigured,
                 'email_notifications_enabled' => $emailNotificationsEnabled,
+                'whatsapp_notifications_enabled' => $whatsappNotificationsEnabled,
+                'notifications_channel' => (string) ($channels['channel'] ?? 'email'),
                 'fast_mail_mode' => $fastMailMode,
                 'emails_per_minute' => $emailsPerMinute,
                 'transient_retry_delay_ms' => $transientRetryDelayMs,
@@ -1561,7 +1609,9 @@ class ActivationController extends Controller
             ['name' => $tenantId, 'default_language' => 'es'],
         );
         $productionMode = (bool) ($tenant?->notifications_production_mode ?? false);
-        $emailNotificationsEnabled = (bool) ($tenant?->notifications_email_enabled ?? false);
+        $channels = $this->resolveNotificationChannels($tenant);
+        $emailNotificationsEnabled = (bool) ($channels['email_enabled'] ?? false);
+        $whatsappNotificationsEnabled = (bool) ($channels['whatsapp_enabled'] ?? false);
         $modeLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
         $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
 
@@ -1615,6 +1665,7 @@ class ActivationController extends Controller
         }
 
         $recipients = [];
+        $whatsappRecipients = [];
         if ($productionMode) {
             if (Schema::hasTable('persona_rol_grupo_cfg') && Schema::hasTable('persona_mst')) {
                 $rows = DB::table('persona_rol_grupo_cfg as prg')
@@ -1635,6 +1686,7 @@ class ActivationController extends Controller
                     )
                     ->get([
                         'p.per-email as email',
+                        'p.per-tel_mov as tel_mov',
                         'p.per-nombre as nombre',
                         'p.per-apellido_1 as apellido_1',
                         'p.per-apellido_2 as apellido_2',
@@ -1650,6 +1702,10 @@ class ActivationController extends Controller
                         (string) ($row->apellido_1 ?? ''),
                         (string) ($row->apellido_2 ?? ''),
                     ])));
+                    $phone = $this->normalizeWhatsappNumber((string) ($row->tel_mov ?? ''));
+                    if ($phone !== '') {
+                        $whatsappRecipients[$phone] = $recipients[$email];
+                    }
                 }
             }
         } else {
@@ -1672,6 +1728,9 @@ class ActivationController extends Controller
                     }
                 }
             }
+            foreach ($this->parseWhatsappNumbers($tenant?->test_notification_whatsapp_numbers) as $phone) {
+                $whatsappRecipients[$phone] = $phone;
+            }
         }
 
         $subject = $subjectPrefix.'Aviso — '.$tipoLabel;
@@ -1692,15 +1751,18 @@ class ActivationController extends Controller
         $mode = $this->resolveNotificationMode();
         $sent = 0;
         $filesWritten = 0;
+        $whatsappSent = 0;
+        $whatsappFilesWritten = 0;
         $ts = now()->format('YmdHis');
 
-        if (empty($recipients)) {
+        if (empty($recipients) && empty($whatsappRecipients)) {
             return response()->json([
                 'message' => 'No recipients.',
                 'mode' => $mode,
                 'sent' => 0,
                 'files_written' => 0,
                 'recipients' => 0,
+                'whatsapp_recipients' => 0,
                 'email_subject' => $subject,
                 'email_body' => strip_tags($bodyHtml),
             ]);
@@ -1723,16 +1785,39 @@ class ActivationController extends Controller
             });
             $sent++;
         }
+        $whatsappMessage = trim(strip_tags($bodyHtml));
+        foreach ($whatsappRecipients as $phone => $displayName) {
+            if ($mode === 'file') {
+                $safe = preg_replace('/[^A-Za-z0-9._-]+/', '_', $phone) ?: 'whatsapp';
+                $path = 'notifications_outbox/'.$tenantId.'/normalidad/'.$ts.'-wa-'.$safe.'.txt';
+                Storage::disk('local')->put($path, $whatsappMessage."\n");
+                $whatsappFilesWritten++;
+                continue;
+            }
+            if (! $whatsappNotificationsEnabled) {
+                continue;
+            }
+            $res = $this->sendWhatsappText($tenantId, $phone, $whatsappMessage, ['type' => 'normalidad']);
+            if (($res['sent'] ?? false) === true) {
+                $whatsappSent++;
+            }
+        }
 
         return response()->json([
             'message' => 'OK',
             'mode' => $mode,
             'sent' => $sent,
             'files_written' => $filesWritten,
+            'whatsapp_sent' => $whatsappSent,
+            'whatsapp_files_written' => $whatsappFilesWritten,
             'recipients' => count($recipients),
+            'whatsapp_recipients' => count($whatsappRecipients),
             'email_subject' => $subject,
             'email_body' => strip_tags($bodyHtml),
-            'warnings' => ! $emailNotificationsEnabled ? ['Envío de correos desactivado en configuración del tenant.'] : [],
+            'warnings' => array_values(array_filter([
+                ! $emailNotificationsEnabled ? 'Envío de correos desactivado en configuración del tenant.' : null,
+                ! $whatsappNotificationsEnabled ? 'Envío de WhatsApp desactivado en configuración del tenant.' : null,
+            ])),
         ]);
     }
 
@@ -1781,7 +1866,9 @@ class ActivationController extends Controller
             ['name' => $tenantId, 'default_language' => 'es'],
         );
         $productionMode = (bool) ($tenant?->notifications_production_mode ?? false);
-        $emailNotificationsEnabled = (bool) ($tenant?->notifications_email_enabled ?? false);
+        $channels = $this->resolveNotificationChannels($tenant);
+        $emailNotificationsEnabled = (bool) ($channels['email_enabled'] ?? false);
+        $whatsappNotificationsEnabled = (bool) ($channels['whatsapp_enabled'] ?? false);
         $modeLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
         $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
         $simPrefix = $isSimulacro ? '[SIMULACRO] ' : '';
@@ -1858,16 +1945,22 @@ class ActivationController extends Controller
         }
 
         $recipients = [];
+        $whatsappRecipients = [];
         $recipientSource = 'none';
         if ($productionMode) {
             if ($isAviso) {
                 $recipientSource = 'users_roles';
+                $userPhoneColumn = Schema::hasColumn('users', 'phone');
+                $userColumns = ['name', 'email', 'perfil'];
+                if ($userPhoneColumn) {
+                    $userColumns[] = 'phone';
+                }
                 $rows = User::query()
                     ->when(
                         Schema::hasColumn('users', 'tenant_id'),
                         static fn ($q) => $q->where('tenant_id', $tenantId),
                     )
-                    ->get(['name', 'email', 'perfil']);
+                    ->get($userColumns);
 
                 foreach ($rows as $row) {
                     $perfil = strtolower(trim((string) ($row->perfil ?? '')));
@@ -1876,9 +1969,17 @@ class ActivationController extends Controller
                     }
                     $email = strtolower(trim((string) ($row->email ?? '')));
                     if ($email === '') {
+                        $phone = $this->normalizeWhatsappNumber((string) ($row->phone ?? ''));
+                        if ($phone !== '') {
+                            $whatsappRecipients[$phone] = trim((string) ($row->name ?? '')) ?: $phone;
+                        }
                         continue;
                     }
                     $recipients[$email] = trim((string) ($row->name ?? '')) ?: $email;
+                    $phone = $this->normalizeWhatsappNumber((string) ($row->phone ?? ''));
+                    if ($phone !== '') {
+                        $whatsappRecipients[$phone] = $recipients[$email];
+                    }
                 }
             } elseif (Schema::hasTable('persona_rol_grupo_cfg') && Schema::hasTable('persona_mst')) {
                 $recipientSource = 'roles_groups';
@@ -1900,6 +2001,7 @@ class ActivationController extends Controller
                     )
                     ->get([
                         'p.per-email as email',
+                        'p.per-tel_mov as tel_mov',
                         'p.per-nombre as nombre',
                         'p.per-apellido_1 as apellido_1',
                         'p.per-apellido_2 as apellido_2',
@@ -1915,6 +2017,10 @@ class ActivationController extends Controller
                         (string) ($row->apellido_1 ?? ''),
                         (string) ($row->apellido_2 ?? ''),
                     ])));
+                    $phone = $this->normalizeWhatsappNumber((string) ($row->tel_mov ?? ''));
+                    if ($phone !== '') {
+                        $whatsappRecipients[$phone] = $recipients[$email];
+                    }
                 }
             }
         } else {
@@ -1938,6 +2044,9 @@ class ActivationController extends Controller
                     }
                 }
             }
+            foreach ($this->parseWhatsappNumbers($tenant?->test_notification_whatsapp_numbers) as $phone) {
+                $whatsappRecipients[$phone] = $phone;
+            }
         }
 
         $subject = $subjectPrefix.$simPrefix.'Resumen '.$scenarioLabel.($tipoLabel ? ' — '.$tipoLabel : '');
@@ -1959,15 +2068,18 @@ class ActivationController extends Controller
         $mode = $this->resolveNotificationMode();
         $sent = 0;
         $filesWritten = 0;
+        $whatsappSent = 0;
+        $whatsappFilesWritten = 0;
         $ts = now()->format('YmdHis');
 
-        if (empty($recipients)) {
+        if (empty($recipients) && empty($whatsappRecipients)) {
             return response()->json([
                 'message' => 'No recipients.',
                 'mode' => $mode,
                 'sent' => 0,
                 'files_written' => 0,
                 'recipients' => 0,
+                'whatsapp_recipients' => 0,
                 'recipient_emails' => [],
                 'sent_recipient_emails' => [],
                 'email_subject' => $subject,
@@ -1975,6 +2087,7 @@ class ActivationController extends Controller
                 'debug' => [
                     'production_mode' => $productionMode,
                     'email_notifications_enabled' => $emailNotificationsEnabled,
+                    'whatsapp_notifications_enabled' => $whatsappNotificationsEnabled,
                     'recipient_source' => $recipientSource,
                     'is_aviso' => $isAviso,
                 ],
@@ -1998,21 +2111,45 @@ class ActivationController extends Controller
             });
             $sent++;
         }
+        $whatsappMessage = trim(strip_tags($bodyHtml));
+        foreach ($whatsappRecipients as $phone => $displayName) {
+            if ($mode === 'file') {
+                $safe = preg_replace('/[^A-Za-z0-9._-]+/', '_', $phone) ?: 'whatsapp';
+                $path = 'notifications_outbox/'.$tenantId.'/summary/'.$activationId.'/'.$ts.'-wa-'.$safe.'.txt';
+                Storage::disk('local')->put($path, $whatsappMessage."\n");
+                $whatsappFilesWritten++;
+                continue;
+            }
+            if (! $whatsappNotificationsEnabled) {
+                continue;
+            }
+            $res = $this->sendWhatsappText($tenantId, $phone, $whatsappMessage, ['type' => 'summary', 'activation_id' => $activationId]);
+            if (($res['sent'] ?? false) === true) {
+                $whatsappSent++;
+            }
+        }
 
         return response()->json([
             'message' => 'OK',
             'mode' => $mode,
             'sent' => $sent,
             'files_written' => $filesWritten,
+            'whatsapp_sent' => $whatsappSent,
+            'whatsapp_files_written' => $whatsappFilesWritten,
             'recipients' => count($recipients),
+            'whatsapp_recipients' => count($whatsappRecipients),
             'recipient_emails' => array_values(array_keys($recipients)),
             'sent_recipient_emails' => $sent > 0 ? array_values(array_keys($recipients)) : [],
             'email_subject' => $subject,
             'email_body' => strip_tags($bodyHtml),
-            'warnings' => ! $emailNotificationsEnabled ? ['Envío de correos desactivado en configuración del tenant.'] : [],
+            'warnings' => array_values(array_filter([
+                ! $emailNotificationsEnabled ? 'Envío de correos desactivado en configuración del tenant.' : null,
+                ! $whatsappNotificationsEnabled ? 'Envío de WhatsApp desactivado en configuración del tenant.' : null,
+            ])),
             'debug' => [
                 'production_mode' => $productionMode,
                 'email_notifications_enabled' => $emailNotificationsEnabled,
+                'whatsapp_notifications_enabled' => $whatsappNotificationsEnabled,
                 'recipient_source' => $recipientSource,
                 'is_aviso' => $isAviso,
             ],
@@ -2046,7 +2183,9 @@ class ActivationController extends Controller
             ['name' => $tenantId, 'default_language' => 'es'],
         );
         $productionMode = (bool) ($tenant?->notifications_production_mode ?? false);
-        $emailNotificationsEnabled = (bool) ($tenant?->notifications_email_enabled ?? false);
+        $channels = $this->resolveNotificationChannels($tenant);
+        $emailNotificationsEnabled = (bool) ($channels['email_enabled'] ?? false);
+        $whatsappNotificationsEnabled = (bool) ($channels['whatsapp_enabled'] ?? false);
         $mode = $this->resolveNotificationMode();
 
         $groupName = '';
@@ -2061,6 +2200,7 @@ class ActivationController extends Controller
         }
 
         $personEmail = '';
+        $personWhatsapp = '';
         $personLabel = '';
         if (Schema::hasTable('persona_mst')) {
             $person = DB::table('persona_mst as p')
@@ -2071,11 +2211,13 @@ class ActivationController extends Controller
                 ->where('p.per-id', $perId)
                 ->first([
                     'p.per-email as email',
+                    'p.per-tel_mov as tel_mov',
                     'p.per-nombre as nombre',
                     'p.per-apellido_1 as apellido_1',
                     'p.per-apellido_2 as apellido_2',
                 ]);
             $personEmail = strtolower(trim((string) ($person->email ?? '')));
+            $personWhatsapp = $this->normalizeWhatsappNumber((string) ($person->tel_mov ?? ''));
             $personLabel = trim(implode(' ', array_filter([
                 (string) ($person->nombre ?? ''),
                 (string) ($person->apellido_1 ?? ''),
@@ -2084,9 +2226,13 @@ class ActivationController extends Controller
         }
 
         $recipients = [];
+        $whatsappRecipients = [];
         if ($productionMode) {
             if ($personEmail !== '') {
                 $recipients[$personEmail] = $personLabel !== '' ? $personLabel : $personEmail;
+            }
+            if ($personWhatsapp !== '') {
+                $whatsappRecipients[$personWhatsapp] = $personLabel !== '' ? $personLabel : $personWhatsapp;
             }
         } else {
             $raw = $tenant?->test_notification_emails;
@@ -2102,6 +2248,9 @@ class ActivationController extends Controller
                     $recipients[$email] = $email;
                 }
             }
+            foreach ($this->parseWhatsappNumbers($tenant?->test_notification_whatsapp_numbers) as $phone) {
+                $whatsappRecipients[$phone] = $phone;
+            }
         }
 
         $subject = 'Cambio de titularidad'.($groupName !== '' ? ' — '.$groupName : '');
@@ -2114,6 +2263,8 @@ class ActivationController extends Controller
 
         $sent = 0;
         $filesWritten = 0;
+        $whatsappSent = 0;
+        $whatsappFilesWritten = 0;
         $ts = now()->format('YmdHis');
         foreach ($recipients as $email => $displayName) {
             if ($mode === 'file') {
@@ -2131,20 +2282,43 @@ class ActivationController extends Controller
             });
             $sent++;
         }
+        foreach ($whatsappRecipients as $phone => $displayName) {
+            if ($mode === 'file') {
+                $safe = preg_replace('/[^A-Za-z0-9._-]+/', '_', $phone) ?: 'whatsapp';
+                $path = 'notifications_outbox/'.$tenantId.'/titular/'.$activationId.'/'.$ts.'-wa-'.$safe.'.txt';
+                Storage::disk('local')->put($path, $text."\n");
+                $whatsappFilesWritten++;
+                continue;
+            }
+            if (! $whatsappNotificationsEnabled) {
+                continue;
+            }
+            $res = $this->sendWhatsappText($tenantId, $phone, $text, ['type' => 'titular', 'activation_id' => $activationId]);
+            if (($res['sent'] ?? false) === true) {
+                $whatsappSent++;
+            }
+        }
 
         return response()->json([
             'message' => 'OK',
             'mode' => $mode,
             'sent' => $sent,
             'files_written' => $filesWritten,
+            'whatsapp_sent' => $whatsappSent,
+            'whatsapp_files_written' => $whatsappFilesWritten,
             'recipients' => count($recipients),
+            'whatsapp_recipients' => count($whatsappRecipients),
             'recipient_emails' => array_keys($recipients),
             'email_subject' => $subject,
             'email_body' => strip_tags($bodyHtml),
-            'warnings' => ! $emailNotificationsEnabled ? ['Envío de correos desactivado en configuración del tenant.'] : [],
+            'warnings' => array_values(array_filter([
+                ! $emailNotificationsEnabled ? 'Envío de correos desactivado en configuración del tenant.' : null,
+                ! $whatsappNotificationsEnabled ? 'Envío de WhatsApp desactivado en configuración del tenant.' : null,
+            ])),
             'debug' => [
                 'production_mode' => $productionMode,
                 'email_notifications_enabled' => $emailNotificationsEnabled,
+                'whatsapp_notifications_enabled' => $whatsappNotificationsEnabled,
             ],
         ]);
     }
@@ -2172,9 +2346,135 @@ class ActivationController extends Controller
         return nl2br($withLinks);
     }
 
-    private function postWhatsappWebhook(string $webhookUrl, array $payload): HttpClientResponse|\GuzzleHttp\Promise\PromiseInterface
+    private function postWhatsappWebhook(string $webhookUrl, array $payload): HttpClientResponse
     {
-        return Http::timeout(8)->post($webhookUrl, $payload);
+        $result = Http::timeout(8)->post($webhookUrl, $payload);
+        if ($result instanceof \GuzzleHttp\Promise\PromiseInterface) {
+            $resolved = $result->wait();
+            if ($resolved instanceof HttpClientResponse) {
+                return $resolved;
+            }
+            throw new \RuntimeException('Respuesta inválida del webhook de WhatsApp.');
+        }
+
+        return $result;
+    }
+
+    private function resolveNotificationChannels(?Tenant $tenant): array
+    {
+        $channel = strtolower(trim((string) ($tenant?->notifications_channel ?? 'email')));
+        if (! in_array($channel, ['email', 'whatsapp', 'both'], true)) {
+            $channel = 'email';
+        }
+        $emailEnabledByChannel = $channel === 'email' || $channel === 'both';
+        $whatsappEnabledByChannel = $channel === 'whatsapp' || $channel === 'both';
+
+        return [
+            'channel' => $channel,
+            'email_enabled' => (bool) ($tenant?->notifications_email_enabled ?? false) && $emailEnabledByChannel,
+            'whatsapp_enabled' => $whatsappEnabledByChannel,
+        ];
+    }
+
+    private function normalizeWhatsappNumber(string $raw): string
+    {
+        $value = trim($raw);
+        if ($value === '') {
+            return '';
+        }
+        $value = preg_replace('/[()\-\.\s]+/', '', $value) ?? '';
+        if (str_starts_with($value, '+')) {
+            $digits = preg_replace('/\D+/', '', substr($value, 1)) ?? '';
+            return $digits !== '' ? '+'.$digits : '';
+        }
+
+        return preg_replace('/\D+/', '', $value) ?? '';
+    }
+
+    private function parseWhatsappNumbers(mixed $raw): array
+    {
+        $values = is_array($raw) ? $raw : [];
+        $numbers = [];
+        foreach ($values as $number) {
+            $normalized = $this->normalizeWhatsappNumber((string) $number);
+            if ($normalized !== '') {
+                $numbers[] = $normalized;
+            }
+        }
+
+        return array_values(array_unique($numbers));
+    }
+
+    private function sendWhatsappText(string $tenantId, string $phone, string $message, array $context = []): array
+    {
+        $normalizedPhone = $this->normalizeWhatsappNumber($phone);
+        if ($normalizedPhone === '') {
+            return ['sent' => false, 'error' => 'número de WhatsApp inválido'];
+        }
+        $provider = strtolower(trim((string) env('NOTIFICATIONS_WHATSAPP_PROVIDER', 'brevo')));
+        if ($provider === '') {
+            $provider = 'brevo';
+        }
+        if ($provider === 'none') {
+            return ['sent' => false, 'error' => 'proveedor WhatsApp deshabilitado'];
+        }
+        try {
+            if ($provider === 'webhook') {
+                $webhookUrl = trim((string) env('WHATSAPP_WEBHOOK_URL', ''));
+                if ($webhookUrl === '') {
+                    return ['sent' => false, 'error' => 'WHATSAPP_WEBHOOK_URL no configurado'];
+                }
+                $payload = array_merge($context, [
+                    'tenant_id' => $tenantId,
+                    'phone' => $normalizedPhone,
+                    'message' => $message,
+                ]);
+                $res = $this->postWhatsappWebhook($webhookUrl, $payload);
+                if ($res->failed()) {
+                    return ['sent' => false, 'error' => 'webhook '.((string) $res->status()).' '.$res->body()];
+                }
+
+                return ['sent' => true, 'error' => ''];
+            }
+
+            $apiKey = trim((string) config('services.brevo.api_key', ''));
+            if ($apiKey === '') {
+                return ['sent' => false, 'error' => 'BREVO_API_KEY no configurado'];
+            }
+            $sender = trim((string) env('BREVO_WHATSAPP_SENDER', ''));
+            if ($sender === '') {
+                return ['sent' => false, 'error' => 'BREVO_WHATSAPP_SENDER no configurado'];
+            }
+            $url = trim((string) env('BREVO_WHATSAPP_API_URL', 'https://api.brevo.com/v3/whatsapp/sendMessage'));
+            $response = Http::timeout(12)
+                ->withHeaders([
+                    'api-key' => $apiKey,
+                    'accept' => 'application/json',
+                    'content-type' => 'application/json',
+                ])
+                ->post($url, [
+                    'senderNumber' => $sender,
+                    'contactNumbers' => [$normalizedPhone],
+                    'content' => [
+                        'type' => 'text',
+                        'text' => $message,
+                    ],
+                ]);
+            if ($response instanceof \GuzzleHttp\Promise\PromiseInterface) {
+                $resolved = $response->wait();
+                if (! $resolved instanceof HttpClientResponse) {
+                    return ['sent' => false, 'error' => 'Respuesta inválida de Brevo WhatsApp'];
+                }
+                $response = $resolved;
+            }
+            if ($response->failed()) {
+                return ['sent' => false, 'error' => 'brevo '.((string) $response->status()).' '.$response->body()];
+            }
+
+            return ['sent' => true, 'error' => ''];
+        } catch (\Throwable $e) {
+            return ['sent' => false, 'error' => trim((string) $e->getMessage())];
+        }
     }
 
     public function sendEndNotifications(Request $request, string $activationId): JsonResponse
@@ -2213,6 +2513,7 @@ class ActivationController extends Controller
             ->get([
                 'asg.as_en_fu-per_id-fk as per_id',
                 'p.per-email as email',
+                'p.per-tel_mov as tel_mov',
                 'p.per-nombre as nombre',
                 'p.per-apellido_1 as apellido_1',
                 'p.per-apellido_2 as apellido_2',
@@ -2234,10 +2535,14 @@ class ActivationController extends Controller
             $byPerson[$perId] ??= [
                 'per_id' => $perId,
                 'email' => $email !== '' ? $email : null,
+                'tel_mov' => $this->normalizeWhatsappNumber((string) ($r->tel_mov ?? '')),
                 'nombre' => $nombre !== '' ? $nombre : $perId,
             ];
             if (($byPerson[$perId]['email'] ?? null) === null && $email !== '') {
                 $byPerson[$perId]['email'] = $email;
+            }
+            if (($byPerson[$perId]['tel_mov'] ?? null) === null) {
+                $byPerson[$perId]['tel_mov'] = $this->normalizeWhatsappNumber((string) ($r->tel_mov ?? ''));
             }
             if (($byPerson[$perId]['nombre'] ?? '') === $perId && $nombre !== '') {
                 $byPerson[$perId]['nombre'] = $nombre;
@@ -2256,10 +2561,13 @@ class ActivationController extends Controller
 
         $tenant = Tenant::query()->where('tenant_id', $tenantId)->first();
         $productionMode = (bool) ($tenant?->notifications_production_mode ?? false);
-        $emailNotificationsEnabled = (bool) ($tenant?->notifications_email_enabled ?? false);
+        $channels = $this->resolveNotificationChannels($tenant);
+        $emailNotificationsEnabled = (bool) ($channels['email_enabled'] ?? false);
+        $whatsappNotificationsEnabled = (bool) ($channels['whatsapp_enabled'] ?? false);
         $modoLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
         $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
         $testEmails = [];
+        $testWhatsappNumbers = [];
         if (! $productionMode) {
             $raw = $tenant?->test_notification_emails;
             $rawArr = is_array($raw) ? $raw : [];
@@ -2271,6 +2579,7 @@ class ActivationController extends Controller
                 }
             }
             $testEmails = array_values(array_unique($emails));
+            $testWhatsappNumbers = $this->parseWhatsappNumbers($tenant?->test_notification_whatsapp_numbers);
         }
 
         $isSimulacro = false;
@@ -2298,6 +2607,8 @@ class ActivationController extends Controller
         $ts = now()->format('Ymd_His');
         $sent = 0;
         $filesWritten = 0;
+        $whatsappSent = 0;
+        $whatsappFilesWritten = 0;
 
         if ($mode === 'file') {
             $dir = 'notifications_outbox/'.$tenantId.'/'.$activationId;
@@ -2419,6 +2730,45 @@ class ActivationController extends Controller
             ];
         }
 
+        $whatsappTargets = [];
+        if ($productionMode) {
+            foreach ($people as $p) {
+                $phone = $this->normalizeWhatsappNumber((string) ($p['tel_mov'] ?? ''));
+                if ($phone === '') {
+                    continue;
+                }
+                $whatsappTargets[$phone] = $phone;
+            }
+        } else {
+            foreach ($testWhatsappNumbers as $phone) {
+                $normalized = $this->normalizeWhatsappNumber((string) $phone);
+                if ($normalized === '') {
+                    continue;
+                }
+                $whatsappTargets[$normalized] = $normalized;
+            }
+        }
+        $whatsappMessage = $subject.($detalle !== '' ? "\n\n".$detalle : '');
+        foreach (array_keys($whatsappTargets) as $phone) {
+            if ($mode === 'file') {
+                $safe = preg_replace('/[^A-Za-z0-9._-]+/', '_', $phone) ?: 'whatsapp';
+                $path = 'notifications_outbox/'.$tenantId.'/'.$activationId.'/'.$ts.'-end-wa-'.$safe.'.txt';
+                Storage::disk('local')->put($path, $whatsappMessage."\n");
+                $whatsappFilesWritten++;
+                continue;
+            }
+            if (! $whatsappNotificationsEnabled) {
+                continue;
+            }
+            $wa = $this->sendWhatsappText($tenantId, $phone, $whatsappMessage, [
+                'activation_id' => $activationId,
+                'type' => 'end',
+            ]);
+            if (($wa['sent'] ?? false) === true) {
+                $whatsappSent++;
+            }
+        }
+
         if ($mode === 'file') {
             $indexPath = 'notifications_outbox/'.$tenantId.'/'.$activationId.'/'.$ts.'-end-index.json';
             Storage::disk('local')->put($indexPath, json_encode($index, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
@@ -2445,7 +2795,10 @@ class ActivationController extends Controller
             'mode' => $mode,
             'sent' => $sent,
             'files_written' => $filesWritten,
+            'whatsapp_sent' => $whatsappSent,
+            'whatsapp_files_written' => $whatsappFilesWritten,
             'recipients' => count($people),
+            'whatsapp_recipients' => count($whatsappTargets),
         ]);
     }
 

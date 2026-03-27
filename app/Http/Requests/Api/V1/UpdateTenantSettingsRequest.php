@@ -18,6 +18,7 @@ class UpdateTenantSettingsRequest extends FormRequest
             'theme' => ['sometimes', 'nullable', 'array'],
             'notifications_production_mode' => ['sometimes', 'boolean'],
             'notifications_email_enabled' => ['sometimes', 'boolean'],
+            'notifications_channel' => ['sometimes', Rule::in(['email', 'whatsapp', 'both'])],
             'test_notification_emails' => ['sometimes', 'nullable', 'array'],
             'test_notification_emails.*' => ['required', 'email'],
             'test_notification_whatsapp_numbers' => ['sometimes', 'nullable', 'array'],
