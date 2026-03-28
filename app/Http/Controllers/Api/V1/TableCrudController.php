@@ -48,14 +48,47 @@ class TableCrudController extends Controller
 
         $metadata = null;
         if (Schema::hasTable('informacion_tablas')) {
+            $hasContenidoCa = Schema::hasColumn('informacion_tablas', 'contenido_ca');
+            $hasFinalidadCa = Schema::hasColumn('informacion_tablas', 'finalidad_ca');
+            $hasContenidoEn = Schema::hasColumn('informacion_tablas', 'contenido_en');
+            $hasFinalidadEn = Schema::hasColumn('informacion_tablas', 'finalidad_en');
+            $select = ['contenido', 'finalidad'];
+            if ($hasContenidoCa) {
+                $select[] = 'contenido_ca';
+            }
+            if ($hasFinalidadCa) {
+                $select[] = 'finalidad_ca';
+            }
+            if ($hasContenidoEn) {
+                $select[] = 'contenido_en';
+            }
+            if ($hasFinalidadEn) {
+                $select[] = 'finalidad_en';
+            }
             $row = DB::table('informacion_tablas')
                 ->where('nombre_tabla', $table)
-                ->first(['contenido', 'finalidad']);
+                ->first($select);
 
             if ($row !== null) {
+                $contenidoEs = is_string($row->contenido ?? null) ? trim((string) $row->contenido) : '';
+                $finalidadEs = is_string($row->finalidad ?? null) ? trim((string) $row->finalidad) : '';
+                $contenidoCa = $hasContenidoCa && is_string($row->contenido_ca ?? null) ? trim((string) $row->contenido_ca) : '';
+                $finalidadCa = $hasFinalidadCa && is_string($row->finalidad_ca ?? null) ? trim((string) $row->finalidad_ca) : '';
+                $contenidoEn = $hasContenidoEn && is_string($row->contenido_en ?? null) ? trim((string) $row->contenido_en) : '';
+                $finalidadEn = $hasFinalidadEn && is_string($row->finalidad_en ?? null) ? trim((string) $row->finalidad_en) : '';
+                $contenido = match ($locale) {
+                    'ca' => $contenidoCa !== '' ? $contenidoCa : $contenidoEs,
+                    'en' => $contenidoEn !== '' ? $contenidoEn : $contenidoEs,
+                    default => $contenidoEs,
+                };
+                $finalidad = match ($locale) {
+                    'ca' => $finalidadCa !== '' ? $finalidadCa : $finalidadEs,
+                    'en' => $finalidadEn !== '' ? $finalidadEn : $finalidadEs,
+                    default => $finalidadEs,
+                };
                 $metadata = [
-                    'contenido' => $row->contenido ?? null,
-                    'finalidad' => $row->finalidad ?? null,
+                    'contenido' => $contenido !== '' ? $contenido : null,
+                    'finalidad' => $finalidad !== '' ? $finalidad : null,
                 ];
             }
         }
