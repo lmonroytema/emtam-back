@@ -802,14 +802,29 @@ class TenantDocumentController extends Controller
         $doc = DB::table('tenant_documents')
             ->where('id', $documentId)
             ->where('tenant_id', $tenantId)
-            ->first(['path', 'original_name']);
+            ->first(['path', 'original_name', 'stored_name', 'name', 'extension']);
 
         if (! $doc) {
             abort(404, 'Document not found.');
         }
 
         $path = (string) ($doc->path ?? '');
-        $filename = (string) ($doc->original_name ?? 'documento');
+        $filename = trim((string) ($doc->original_name ?? ''));
+        if ($filename === '') {
+            $stored = trim((string) ($doc->stored_name ?? ''));
+            if ($stored !== '') {
+                $filename = preg_replace('/^[0-9a-fA-F-]{36}-/', '', $stored) ?: $stored;
+            }
+        }
+        if ($filename === '') {
+            $title = trim((string) ($doc->name ?? 'documento'));
+            $title = preg_replace('/[^A-Za-z0-9._-]+/', '_', $title) ?: 'documento';
+            $ext = trim((string) ($doc->extension ?? ''));
+            if ($ext !== '' && ! str_contains(strtolower($title), '.'.strtolower($ext))) {
+                $title .= '.'.strtolower($ext);
+            }
+            $filename = $title;
+        }
         if ($path !== '' && Storage::disk('local')->exists($path)) {
             $absolutePath = Storage::disk('local')->path($path);
             return response()->download($absolutePath, $filename);
