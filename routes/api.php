@@ -75,6 +75,7 @@ Route::prefix('v1')->group(function () {
         Route::put('user/language', [UserLanguageController::class, 'update']);
         Route::put('user/password', [UserPasswordController::class, 'update']);
 
+        Route::get('tenant/documents/risks', [TenantDocumentController::class, 'listRiskOptions']);
         Route::get('tenant/documents/folders', [TenantDocumentController::class, 'listFolders']);
         Route::post('tenant/documents/folders', [TenantDocumentController::class, 'createFolder']);
         Route::put('tenant/documents/folders/{folderId}', [TenantDocumentController::class, 'updateFolder']);

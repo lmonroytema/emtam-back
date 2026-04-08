@@ -21,6 +21,43 @@ class TenantDocumentController extends Controller
         private readonly AuditLogger $auditLogger,
     ) {}
 
+    public function listRiskOptions(): JsonResponse
+    {
+        $tenantId = $this->tenantContext->tenantId();
+        if ($tenantId === null) {
+            return response()->json(['message' => __('messages.tenant.missing')], 422);
+        }
+        if (! Schema::hasTable('riesgo_cat')) {
+            return response()->json(['risks' => []]);
+        }
+
+        $query = DB::table('riesgo_cat');
+        if (Schema::hasColumn('riesgo_cat', 'rie-tenant_id')) {
+            $query->where(function ($q) use ($tenantId) {
+                $q->where('rie-tenant_id', $tenantId)
+                    ->orWhereNull('rie-tenant_id')
+                    ->orWhere('rie-tenant_id', '');
+            });
+        }
+        $select = ['rie-id', 'rie-cod', 'rie-nombre', 'rie-padre_id-fk', 'rie-nivel'];
+        if (Schema::hasColumn('riesgo_cat', 'rie-activo')) {
+            $select[] = 'rie-activo';
+        }
+        $rows = $query
+            ->orderBy('rie-cod')
+            ->orderBy('rie-nombre')
+            ->get($select);
+        if (Schema::hasColumn('riesgo_cat', 'rie-activo')) {
+            $rows = $rows->filter(function ($row) {
+                $v = strtoupper(trim((string) ($row->{'rie-activo'} ?? '')));
+
+                return ! in_array($v, ['NO', '0', 'FALSE'], true);
+            })->values();
+        }
+
+        return response()->json(['risks' => $rows]);
+    }
+
     public function listFolders(): JsonResponse
     {
         $tenantId = $this->tenantContext->tenantId();

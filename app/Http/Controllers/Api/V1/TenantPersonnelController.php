@@ -486,14 +486,25 @@ class TenantPersonnelController extends Controller
         if (! Schema::hasTable('rol_cat')) {
             return [];
         }
+        $select = ['rol-id', 'rol-nombre'];
+        $hasActiveColumn = Schema::hasColumn('rol_cat', 'rol-activo');
+        if ($hasActiveColumn) {
+            $select[] = 'rol-activo';
+        }
         $rows = DB::table('rol_cat')
             ->orderBy('rol-nombre')
-            ->get(['rol-id', 'rol-nombre']);
+            ->get($select);
 
         $out = [];
         foreach ($rows as $row) {
             $id = trim((string) ($row->{'rol-id'} ?? ''));
             $name = trim((string) ($row->{'rol-nombre'} ?? ''));
+            if ($hasActiveColumn) {
+                $activeRaw = strtoupper(trim((string) ($row->{'rol-activo'} ?? 'SI')));
+                if (in_array($activeRaw, ['NO', 'N', '0', 'FALSE'], true)) {
+                    continue;
+                }
+            }
             if ($id === '' || $name === '') {
                 continue;
             }
