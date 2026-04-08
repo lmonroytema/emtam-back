@@ -71,6 +71,11 @@ class AuthController extends Controller
                 'message' => __('messages.auth.invalid_credentials'),
             ], 422);
         }
+        if (Schema::hasColumn('users', 'is_active') && (bool) ($user->is_active ?? true) === false) {
+            return response()->json([
+                'message' => __('messages.auth.invalid_credentials'),
+            ], 422);
+        }
 
         $tenantId = $user->tenant_id ?? $this->tenantContext->tenantId();
         $tenant = null;

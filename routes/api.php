@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\TableCrudController;
 use App\Http\Controllers\Api\V1\TenantDocumentController;
 use App\Http\Controllers\Api\V1\TenantLanguageController;
+use App\Http\Controllers\Api\V1\TenantPersonnelController;
 use App\Http\Controllers\Api\V1\TenantSettingsController;
 use App\Http\Controllers\Api\V1\TenantUsersController;
 use App\Http\Controllers\Api\V1\UserLanguageController;
@@ -65,6 +66,10 @@ Route::prefix('v1')->group(function () {
         Route::post('tenant/users', [TenantUsersController::class, 'store']);
         Route::put('tenant/users/{userId}', [TenantUsersController::class, 'update']);
         Route::delete('tenant/users/{userId}', [TenantUsersController::class, 'destroy']);
+        Route::get('tenant/personnel', [TenantPersonnelController::class, 'index']);
+        Route::post('tenant/personnel', [TenantPersonnelController::class, 'store']);
+        Route::put('tenant/personnel/{personId}', [TenantPersonnelController::class, 'update']);
+        Route::delete('tenant/personnel/{personId}', [TenantPersonnelController::class, 'destroy']);
 
         Route::put('tenant/languages', [TenantLanguageController::class, 'update']);
         Route::put('user/language', [UserLanguageController::class, 'update']);
