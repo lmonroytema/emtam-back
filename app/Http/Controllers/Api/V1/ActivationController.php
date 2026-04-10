@@ -679,36 +679,57 @@ class ActivationController extends Controller
             }
         }
 
-        if ($productionMode && empty($targetEmails) && Schema::hasTable('persona_mst')) {
-            $allPeopleRows = DB::table('persona_mst')
-                ->when(
-                    Schema::hasColumn('persona_mst', 'per-tenant_id'),
-                    static fn ($q) => $q->where('per-tenant_id', $tenantId),
-                )
-                ->when(
-                    Schema::hasColumn('persona_mst', 'per-activo'),
-                    static fn ($q) => $q->whereRaw("UPPER(COALESCE(`per-activo`, 'SI')) <> 'NO'"),
-                )
-                ->get([
-                    'per-id as per_id',
-                    'per-email as email',
-                    'per-tel_mov as tel_mov',
-                    'per-nombre as nombre',
-                    'per-apellido_1 as apellido_1',
-                    'per-apellido_2 as apellido_2',
-                ]);
-            foreach ($allPeopleRows as $ap) {
-                $perId = trim((string) ($ap->per_id ?? ''));
-                if ($perId === '') {
-                    continue;
+        if (Schema::hasTable('users')) {
+            $usersQuery = DB::table('users as u')
+                ->where('u.tenant_id', $tenantId)
+                ->whereIn(DB::raw('LOWER(TRIM(u.perfil))'), ['recurso', 'director']);
+            if (Schema::hasColumn('users', 'is_active')) {
+                $usersQuery->where('u.is_active', true);
+            }
+            $select = ['u.id as user_id', 'u.email as user_email', 'u.name as user_name', 'u.perfil as user_perfil'];
+            $hasPersonaId = Schema::hasColumn('users', 'persona_id');
+            if ($hasPersonaId) {
+                $select[] = 'u.persona_id';
+            }
+            if ($hasPersonaId && Schema::hasTable('persona_mst')) {
+                $usersQuery->leftJoin('persona_mst as p', 'p.per-id', '=', 'u.persona_id');
+                if (Schema::hasColumn('persona_mst', 'per-tenant_id')) {
+                    $usersQuery->where(function ($q) use ($tenantId) {
+                        $q->where('p.per-tenant_id', $tenantId)->orWhereNull('p.per-id');
+                    });
                 }
-                $email = strtolower(trim((string) ($ap->email ?? '')));
-                $telMov = trim((string) ($ap->tel_mov ?? ''));
+                if (Schema::hasColumn('persona_mst', 'per-activo')) {
+                    $usersQuery->where(function ($q) {
+                        $q->whereRaw("UPPER(COALESCE(`p`.`per-activo`, 'SI')) <> 'NO'")->orWhereNull('p.per-id');
+                    });
+                }
+                $select[] = 'p.per-id as per_id';
+                $select[] = 'p.per-email as per_email';
+                $select[] = 'p.per-tel_mov as tel_mov';
+                $select[] = 'p.per-nombre as per_nombre';
+                $select[] = 'p.per-apellido_1 as per_apellido_1';
+                $select[] = 'p.per-apellido_2 as per_apellido_2';
+            }
+            $allUsersRows = $usersQuery->get($select);
+            foreach ($allUsersRows as $ur) {
+                $perId = trim((string) ($ur->per_id ?? ''));
+                if ($perId === '') {
+                    $userId = trim((string) ($ur->user_id ?? ''));
+                    if ($userId === '') {
+                        continue;
+                    }
+                    $perId = 'USR:'.$userId;
+                }
+                $email = strtolower(trim((string) (($ur->per_email ?? null) ?: ($ur->user_email ?? ''))));
+                $telMov = trim((string) ($ur->tel_mov ?? ''));
                 $nombre = trim(implode(' ', array_filter([
-                    (string) ($ap->nombre ?? ''),
-                    (string) ($ap->apellido_1 ?? ''),
-                    (string) ($ap->apellido_2 ?? ''),
+                    (string) ($ur->per_nombre ?? ''),
+                    (string) ($ur->per_apellido_1 ?? ''),
+                    (string) ($ur->per_apellido_2 ?? ''),
                 ])));
+                if ($nombre === '') {
+                    $nombre = trim((string) ($ur->user_name ?? ''));
+                }
                 $byPerson[$perId] ??= [
                     'per_id' => $perId,
                     'email' => $email !== '' ? $email : null,
