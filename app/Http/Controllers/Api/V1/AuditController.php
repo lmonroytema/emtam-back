@@ -67,6 +67,9 @@ class AuditController extends Controller
 
         $to = trim((string) ($request->query('date_to') ?? ''));
         if ($to !== '') {
+            if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $to) === 1) {
+                $to .= ' 23:59:59';
+            }
             $query->where('created_at', '<=', $to);
         }
 

@@ -190,16 +190,33 @@ class ActivationController extends Controller
                 'ac_de_pl-observ' => $data['observ'] ?? null,
             ]);
 
-            if (Schema::hasTable('cronologia_emergencia_trs')) {
-                $activatorGroupId = null;
-                if (Schema::hasTable('persona_rol_grupo_cfg')) {
-                    $prg = DB::table('persona_rol_grupo_cfg')
-                        ->where('pe_ro_gr-per_id-fk', $resolvedPerId)
-                        ->where('pe_ro_gr-rol_id-fk', $resolvedRolId)
-                        ->first();
-                    $activatorGroupId = $prg->{'pe_ro_gr-gr_op_id-fk'} ?? null;
-                }
+            $activatorGroupId = null;
+            if (Schema::hasTable('persona_rol_grupo_cfg')) {
+                $prg = DB::table('persona_rol_grupo_cfg')
+                    ->where('pe_ro_gr-per_id-fk', $resolvedPerId)
+                    ->where('pe_ro_gr-rol_id-fk', $resolvedRolId)
+                    ->first();
+                $activatorGroupId = $prg->{'pe_ro_gr-gr_op_id-fk'} ?? null;
+            }
 
+            $initialMessageNote = trim((string) ($data['mensaje_inic'] ?? ''));
+            if ($initialMessageNote !== '' && Schema::hasTable('notas_operativas_trs')) {
+                $notePayload = [
+                    'no_op-id' => 'NOOP-'.Str::uuid()->toString(),
+                    'no_op-ac_de_pl_id-fk' => $activationId,
+                    'no_op-gr_op_id-fk' => $activatorGroupId,
+                    'no_op-per_id-fk' => $resolvedPerId,
+                    'no_op-ts_nota' => now()->toDateTimeString(),
+                    'no_op-texto' => $initialMessageNote,
+                    'no_op-visibilidad' => 'INTERNA',
+                ];
+                if (Schema::hasColumn('notas_operativas_trs', 'no_op-tenant_id')) {
+                    $notePayload['no_op-tenant_id'] = $tenantId;
+                }
+                DB::table('notas_operativas_trs')->insert($notePayload);
+            }
+
+            if (Schema::hasTable('cronologia_emergencia_trs')) {
                 DB::table('cronologia_emergencia_trs')->insert([
                     'cr_em-id' => 'CREM-'.Str::uuid()->toString(),
                     'cr_em-tenant_id' => $tenantId,
