@@ -183,6 +183,7 @@ class AuditController extends Controller
                     'ac_de_pl-hora_activac as hora',
                     'ac_de_pl-estado as estado',
                     'ac_de_pl-rie_id-fk as riesgo_id',
+                    'ac_de_pl-ni_al_id-fk-inicial as nivel_id',
                 ]);
         }
 
