@@ -2357,14 +2357,26 @@ class TableCrudController extends Controller
             $prevState = (string) ($before['ac_de_pl-estado'] ?? '');
             $nextState = (string) ($after['ac_de_pl-estado'] ?? $prevState);
             if ($prevState !== $nextState) {
+                $prevRiskId = (string) ($before['ac_de_pl-rie_id-fk'] ?? '');
+                $nextRiskId = (string) ($after['ac_de_pl-rie_id-fk'] ?? $prevRiskId);
+                $prevLevelId = (string) ($before['ac_de_pl-ni_al_id-fk-inicial'] ?? '');
+                $nextLevelId = (string) ($after['ac_de_pl-ni_al_id-fk-inicial'] ?? $prevLevelId);
                 return [
                     'event_type' => 'plan_status_changed',
                     'module' => 'activation',
                     'plan_id' => $planId,
                     'entity_id' => $planId,
                     'entity_type' => $table,
-                    'previous_value' => ['estado' => $prevState],
-                    'new_value' => ['estado' => $nextState],
+                    'previous_value' => [
+                        'estado' => $prevState,
+                        'rie_id' => $prevRiskId !== '' ? $prevRiskId : null,
+                        'ni_al_id' => $prevLevelId !== '' ? $prevLevelId : null,
+                    ],
+                    'new_value' => [
+                        'estado' => $nextState,
+                        'rie_id' => $nextRiskId !== '' ? $nextRiskId : null,
+                        'ni_al_id' => $nextLevelId !== '' ? $nextLevelId : null,
+                    ],
                 ];
             }
             return null;

@@ -3932,10 +3932,12 @@ class ActivationController extends Controller
                 'entity_id' => $activationId,
                 'entity_type' => 'activacion_nivel_hist_trs',
                 'previous_value' => [
+                    'rie_id' => $riesgoId !== '' ? $riesgoId : null,
                     'ni_al_id' => $previousLevel?->{'ac_ni_hi-ni_al_id-fk'} ?? null,
                     'ac_se_id' => $previousLevel?->{'ac_ni_hi-ac_se_id-fk'} ?? null,
                 ],
                 'new_value' => [
+                    'rie_id' => $riesgoId !== '' ? $riesgoId : null,
                     'ni_al_id' => $newLevelId,
                     'ac_se_id' => $actionSetId,
                 ],
@@ -4386,6 +4388,24 @@ class ActivationController extends Controller
         $allRowKeys = array_values(array_unique($allRowKeys));
 
         $rows = [];
+        $manualDelegationAssignmentIds = [];
+        if (Schema::hasTable('audit_log_trs')) {
+            $manualDelegationLogs = DB::table('audit_log_trs')
+                ->when(
+                    Schema::hasColumn('audit_log_trs', 'tenant_id'),
+                    static fn ($q) => $q->where('tenant_id', $tenantId),
+                )
+                ->where('plan_id', $activationId)
+                ->whereIn('event_type', ['delegation_created', 'delegation_updated'])
+                ->whereNotNull('entity_id')
+                ->get(['entity_id']);
+            foreach ($manualDelegationLogs as $log) {
+                $id = trim((string) ($log->entity_id ?? ''));
+                if ($id !== '') {
+                    $manualDelegationAssignmentIds[$id] = true;
+                }
+            }
+        }
         foreach ($allRowKeys as $key) {
             $ejec = $latestEjecByKey[$key] ?? null;
             [$groupKey, $detalleId] = array_pad(explode('|', $key, 2), 2, '');
@@ -4404,6 +4424,7 @@ class ActivationController extends Controller
             $personaId = trim((string) ($asg?->{'as_en_fu-per_id-fk'} ?? ''));
             $delegadorId = trim((string) ($asg?->{'as_en_fu-per_id-fk-delegador'} ?? ''));
             $delegated = $personaId !== '' && $delegadorId !== '' && $personaId !== $delegadorId;
+            $delegatedManual = $delegated && $asignacionId !== '' && isset($manualDelegationAssignmentIds[$asignacionId]);
             $titularOriginalId = trim((string) ($titularOriginalByKey[$key]['per_id'] ?? ''));
             $accion = trim((string) ($op?->{'ac_op-descrip'} ?? ''));
             if ($accion === '') {
@@ -4443,6 +4464,7 @@ class ActivationController extends Controller
                 'persona_id' => $personaId !== '' ? $personaId : null,
                 'responsible_id' => $personaId !== '' ? $personaId : null,
                 'delegated' => $delegated,
+                'delegated_manual' => $delegatedManual,
                 'delegator_id' => $delegadorId !== '' ? $delegadorId : null,
                 'titular_original_id' => $titularOriginalId !== '' ? $titularOriginalId : null,
                 'has_execution' => $ejec !== null,
@@ -4477,7 +4499,7 @@ class ActivationController extends Controller
             } else {
                 $pending++;
             }
-            if (! empty($row['delegated'])) {
+            if (! empty($row['delegated_manual'])) {
                 $delegatedCount++;
             }
             $duration = $row['duration_minutes'];
@@ -4525,6 +4547,43 @@ class ActivationController extends Controller
             }, array_values($personaById)),
             'warnings' => $warnings,
         ]);
+    }
+
+    public function logDocumentViewed(Request $request, string $activationId): JsonResponse
+    {
+        $tenantId = $this->tenantContext->tenantId();
+        if ($tenantId === null) {
+            return response()->json(['message' => __('messages.tenant.missing')], 422);
+        }
+
+        $activationId = trim($activationId);
+        if ($activationId === '') {
+            return response()->json(['message' => 'Invalid activation id.'], 422);
+        }
+
+        $payload = $request->validate([
+            'document_id' => ['nullable', 'integer'],
+            'document_name' => ['required', 'string', 'max:255'],
+            'document_url' => ['nullable', 'string', 'max:2000'],
+            'folder_id' => ['nullable', 'integer'],
+            'source' => ['nullable', 'string', 'max:32'],
+        ]);
+
+        $this->auditLogger->logFromRequest($request, [
+            'event_type' => 'document_viewed',
+            'module' => 'documents',
+            'plan_id' => $activationId,
+            'entity_id' => isset($payload['document_id']) ? (string) $payload['document_id'] : null,
+            'entity_type' => 'tenant_documents',
+            'new_value' => [
+                'document_name' => (string) ($payload['document_name'] ?? ''),
+                'document_url' => isset($payload['document_url']) ? (string) $payload['document_url'] : null,
+                'folder_id' => isset($payload['folder_id']) ? (string) $payload['folder_id'] : null,
+                'source' => isset($payload['source']) ? (string) $payload['source'] : null,
+            ],
+        ]);
+
+        return response()->json(['message' => 'Document view logged.'], 201);
     }
 
     public function controlPanel(Request $request, string $activationId): JsonResponse

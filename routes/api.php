@@ -42,6 +42,7 @@ Route::prefix('v1')->group(function () {
         Route::get('acciones/mias', [ActivationController::class, 'myActions']);
         Route::post('acciones/confirmar', [ActivationController::class, 'confirmMyActions']);
         Route::post('activacion/{activationId}/documentos', [ActivationController::class, 'uploadDocuments']);
+        Route::post('activacion/{activationId}/documentos/visto', [ActivationController::class, 'logDocumentViewed']);
         Route::get('activacion/repositorio/riesgo/{riesgoId}', [ActivationController::class, 'listRiskRepository']);
         Route::get('activacion/repositorio/riesgo/{riesgoId}/archivo/{filename}', [ActivationController::class, 'downloadRiskRepositoryFile']);
         Route::post('activacion/repositorio/riesgo/{riesgoId}/enlaces', [ActivationController::class, 'storeRiskRepositoryLink']);
