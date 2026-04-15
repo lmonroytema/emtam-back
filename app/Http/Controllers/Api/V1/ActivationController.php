@@ -4288,6 +4288,7 @@ class ActivationController extends Controller
         }
 
         $notificationTsByPersonaId = [];
+        $notificationIdsByPersonaId = [];
         if (Schema::hasTable('notificacion_envio_trs')) {
             $hasNotifPersona = Schema::hasColumn('notificacion_envio_trs', 'no_en-per_id-fk');
             $hasNotifTs = Schema::hasColumn('notificacion_envio_trs', 'no_en-ts');
@@ -4304,7 +4305,11 @@ class ActivationController extends Controller
                 if (Schema::hasColumn('notificacion_envio_trs', 'no_en-id')) {
                     $sentQuery->orderBy('no_en-id', 'asc');
                 }
-                $sent = $sentQuery->get(['no_en-per_id-fk', 'no_en-ts']);
+                $sentCols = ['no_en-per_id-fk', 'no_en-ts'];
+                if (Schema::hasColumn('notificacion_envio_trs', 'no_en-id')) {
+                    $sentCols[] = 'no_en-id';
+                }
+                $sent = $sentQuery->get($sentCols);
                 foreach ($sent as $n) {
                     $perId = trim((string) ($n->{'no_en-per_id-fk'} ?? ''));
                     $ts = trim((string) ($n->{'no_en-ts'} ?? ''));
@@ -4314,7 +4319,73 @@ class ActivationController extends Controller
                     if (! array_key_exists($perId, $notificationTsByPersonaId)) {
                         $notificationTsByPersonaId[$perId] = $ts;
                     }
+                    $noEnId = trim((string) ($n->{'no_en-id'} ?? ''));
+                    if ($noEnId !== '') {
+                        $notificationIdsByPersonaId[$perId] ??= [];
+                        $notificationIdsByPersonaId[$perId][] = $noEnId;
+                    }
                 }
+            }
+        }
+        $confirmationTsByNotificationId = [];
+        if (Schema::hasTable('notificacion_confirmacion_trs')) {
+            $notifIds = [];
+            foreach ($notificationIdsByPersonaId as $ids) {
+                foreach ((array) $ids as $id) {
+                    $id = trim((string) $id);
+                    if ($id !== '') {
+                        $notifIds[] = $id;
+                    }
+                }
+            }
+            $notifIds = array_values(array_unique($notifIds));
+            if (! empty($notifIds)
+                && Schema::hasColumn('notificacion_confirmacion_trs', 'no_co-no_en_id-fk')
+                && Schema::hasColumn('notificacion_confirmacion_trs', 'no_co-confirmado')
+            ) {
+                $confirmCols = ['no_co-no_en_id-fk', 'no_co-confirmado'];
+                if (Schema::hasColumn('notificacion_confirmacion_trs', 'no_co-ts')) {
+                    $confirmCols[] = 'no_co-ts';
+                }
+                $confirmRows = DB::table('notificacion_confirmacion_trs')
+                    ->when(
+                        Schema::hasColumn('notificacion_confirmacion_trs', 'no_co-tenant_id'),
+                        static fn ($q) => $q->where('no_co-tenant_id', $tenantId),
+                    )
+                    ->whereIn('no_co-no_en_id-fk', $notifIds)
+                    ->orderByDesc('no_co-ts')
+                    ->get($confirmCols);
+                foreach ($confirmRows as $c) {
+                    $noEnId = trim((string) ($c->{'no_co-no_en_id-fk'} ?? ''));
+                    if ($noEnId === '' || array_key_exists($noEnId, $confirmationTsByNotificationId)) {
+                        continue;
+                    }
+                    $confirmed = strtoupper(trim((string) ($c->{'no_co-confirmado'} ?? '')));
+                    if ($confirmed === 'NO' || $confirmed === 'N' || $confirmed === '0' || $confirmed === 'FALSE') {
+                        continue;
+                    }
+                    $confirmationTsByNotificationId[$noEnId] = trim((string) ($c->{'no_co-ts'} ?? ''));
+                }
+            }
+        }
+        $confirmationTsByPersonaId = [];
+        foreach ($notificationIdsByPersonaId as $perId => $ids) {
+            $minTs = null;
+            foreach ((array) $ids as $id) {
+                $id = trim((string) $id);
+                if ($id === '') {
+                    continue;
+                }
+                $ts = trim((string) ($confirmationTsByNotificationId[$id] ?? ''));
+                if ($ts === '') {
+                    continue;
+                }
+                if ($minTs === null || strcmp($ts, $minTs) < 0) {
+                    $minTs = $ts;
+                }
+            }
+            if ($minTs !== null) {
+                $confirmationTsByPersonaId[$perId] = $minTs;
             }
         }
 
@@ -4447,6 +4518,7 @@ class ActivationController extends Controller
                 }
             }
             $notificationTs = $personaId !== '' ? ($notificationTsByPersonaId[$personaId] ?? null) : null;
+            $confirmationTs = $personaId !== '' ? ($confirmationTsByPersonaId[$personaId] ?? null) : null;
             $status = $normalizeActionStatus($ejec);
             if ($status === 'PENDIENTE' && $notificationTs !== null) {
                 $status = 'ENVIADA';
@@ -4458,6 +4530,8 @@ class ActivationController extends Controller
                 'action' => $accion,
                 'status' => $status,
                 'notification_ts' => $notificationTs,
+                'notification_confirmed' => $confirmationTs !== null,
+                'confirmation_ts' => $confirmationTs,
                 'start_ts' => $tsIni !== '' ? $tsIni : null,
                 'end_ts' => $tsFin !== '' ? $tsFin : null,
                 'duration_minutes' => $durationMinutes,

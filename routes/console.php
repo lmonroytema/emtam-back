@@ -3,12 +3,442 @@
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schedule;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
+
+Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function () {
+    if (! Schema::hasTable('tenants')
+        || ! Schema::hasTable('activacion_del_plan_trs')
+        || ! Schema::hasTable('ejecucion_accion_trs')
+        || ! Schema::hasTable('asignacion_en_funciones_trs')
+        || ! Schema::hasTable('accion_set_detalle_cfg')
+        || ! Schema::hasTable('persona_rol_grupo_cfg')
+        || ! Schema::hasTable('notificacion_envio_trs')
+        || ! Schema::hasTable('notificacion_confirmacion_trs')
+    ) {
+        $this->warn('Tablas requeridas no disponibles para autodelegación.');
+
+        return 0;
+    }
+
+    $tenantOption = trim((string) $this->option('tenant'));
+    $dryRun = (bool) $this->option('dry-run');
+    $now = now();
+    $auditLogger = app(\App\Services\AuditLogger::class);
+
+    $tenantsQuery = DB::table('tenants')->select(['tenant_id', 'conformacion_tiempo_limite']);
+    if ($tenantOption !== '') {
+        $tenantsQuery->where('tenant_id', $tenantOption);
+    }
+    $tenants = $tenantsQuery->get();
+
+    $processedActivations = 0;
+    $delegatedActions = 0;
+
+    foreach ($tenants as $tenant) {
+        $tenantId = trim((string) ($tenant->tenant_id ?? ''));
+        $limitMinutes = (int) ($tenant->conformacion_tiempo_limite ?? 0);
+        if ($tenantId === '' || $limitMinutes <= 0) {
+            continue;
+        }
+
+        $activations = DB::table('activacion_del_plan_trs')
+            ->when(
+                Schema::hasColumn('activacion_del_plan_trs', 'ac_de_pl-tenant_id'),
+                static fn ($q) => $q->where('ac_de_pl-tenant_id', $tenantId),
+            )
+            ->when(
+                Schema::hasColumn('activacion_del_plan_trs', 'ac_de_pl-activo'),
+                static fn ($q) => $q->whereRaw("UPPER(COALESCE(`ac_de_pl-activo`, 'SI')) <> 'NO'"),
+            )
+            ->when(
+                Schema::hasColumn('activacion_del_plan_trs', 'ac_de_pl-estado'),
+                static fn ($q) => $q->whereRaw("UPPER(COALESCE(`ac_de_pl-estado`, '')) NOT IN ('FINALIZADA','FINALIZADO')"),
+            )
+            ->get([
+                'ac_de_pl-id',
+                'ac_de_pl-fecha_activac',
+                'ac_de_pl-hora_activac',
+            ]);
+
+        foreach ($activations as $activation) {
+            $activationId = trim((string) ($activation->{'ac_de_pl-id'} ?? ''));
+            $date = trim((string) ($activation->{'ac_de_pl-fecha_activac'} ?? ''));
+            $time = trim((string) ($activation->{'ac_de_pl-hora_activac'} ?? ''));
+            if ($activationId === '' || $date === '' || $time === '') {
+                continue;
+            }
+
+            $activationAt = \Carbon\Carbon::parse($date.' '.$time);
+            $deadline = $activationAt->copy()->addMinutes($limitMinutes);
+            if ($deadline->greaterThan($now)) {
+                continue;
+            }
+            $processedActivations++;
+
+            $details = DB::table('accion_set_detalle_cfg')
+                ->when(
+                    Schema::hasColumn('accion_set_detalle_cfg', 'ac_se_de-tenant_id'),
+                    static fn ($q) => $q->where('ac_se_de-tenant_id', $tenantId),
+                )
+                ->when(
+                    Schema::hasColumn('accion_set_detalle_cfg', 'ac_se_de-activo'),
+                    static fn ($q) => $q->whereRaw("UPPER(COALESCE(`ac_se_de-activo`, 'SI')) <> 'NO'"),
+                )
+                ->get(['ac_se_de-id', 'ac_se_de-rol_id-fk']);
+            $roleByDetailId = [];
+            foreach ($details as $d) {
+                $detailId = trim((string) ($d->{'ac_se_de-id'} ?? ''));
+                $roleId = trim((string) ($d->{'ac_se_de-rol_id-fk'} ?? ''));
+                if ($detailId !== '' && $roleId !== '') {
+                    $roleByDetailId[$detailId] = $roleId;
+                }
+            }
+
+            $sentRows = DB::table('notificacion_envio_trs')
+                ->when(
+                    Schema::hasColumn('notificacion_envio_trs', 'no_en-tenant_id'),
+                    static fn ($q) => $q->where('no_en-tenant_id', $tenantId),
+                )
+                ->where('no_en-ac_de_pl_id-fk', $activationId)
+                ->whereNotNull('no_en-per_id-fk')
+                ->whereNotNull('no_en-ts')
+                ->orderBy('no_en-ts')
+                ->get(['no_en-id', 'no_en-per_id-fk', 'no_en-ts']);
+            $notifIdsByPerson = [];
+            foreach ($sentRows as $s) {
+                $perId = trim((string) ($s->{'no_en-per_id-fk'} ?? ''));
+                $sentTs = trim((string) ($s->{'no_en-ts'} ?? ''));
+                if ($perId === '' || $sentTs === '') {
+                    continue;
+                }
+                if (\Carbon\Carbon::parse($sentTs)->greaterThan($deadline)) {
+                    continue;
+                }
+                $noEnId = trim((string) ($s->{'no_en-id'} ?? ''));
+                if ($noEnId !== '') {
+                    $notifIdsByPerson[$perId][] = $noEnId;
+                }
+            }
+
+            $confirmedByPerson = [];
+            if (! empty($notifIdsByPerson)) {
+                $allNotifIds = array_values(array_unique(array_merge(...array_values($notifIdsByPerson))));
+                $confirmRows = DB::table('notificacion_confirmacion_trs')
+                    ->when(
+                        Schema::hasColumn('notificacion_confirmacion_trs', 'no_co-tenant_id'),
+                        static fn ($q) => $q->where('no_co-tenant_id', $tenantId),
+                    )
+                    ->whereIn('no_co-no_en_id-fk', $allNotifIds)
+                    ->whereRaw("UPPER(COALESCE(`no_co-confirmado`, 'NO')) IN ('SI','S','1','TRUE')")
+                    ->get(['no_co-no_en_id-fk', 'no_co-ts']);
+                $confirmedNotifIds = [];
+                foreach ($confirmRows as $c) {
+                    $noEnId = trim((string) ($c->{'no_co-no_en_id-fk'} ?? ''));
+                    $ts = trim((string) ($c->{'no_co-ts'} ?? ''));
+                    if ($noEnId === '' || $ts === '') {
+                        continue;
+                    }
+                    if (\Carbon\Carbon::parse($ts)->greaterThan($deadline)) {
+                        continue;
+                    }
+                    $confirmedNotifIds[$noEnId] = true;
+                }
+                foreach ($notifIdsByPerson as $perId => $ids) {
+                    foreach ($ids as $id) {
+                        if (isset($confirmedNotifIds[$id])) {
+                            $confirmedByPerson[$perId] = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            $prgRows = DB::table('persona_rol_grupo_cfg')
+                ->when(
+                    Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-tenant_id'),
+                    static fn ($q) => $q->where('pe_ro_gr-tenant_id', $tenantId),
+                )
+                ->when(
+                    Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-activo'),
+                    static fn ($q) => $q->whereRaw("UPPER(COALESCE(`pe_ro_gr-activo`, 'SI')) <> 'NO'"),
+                )
+                ->when(
+                    Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-fech_fin'),
+                    static function ($q): void {
+                        $q->where(function ($sub): void {
+                            $sub->whereNull('pe_ro_gr-fech_fin')->orWhere('pe_ro_gr-fech_fin', '');
+                        });
+                    },
+                )
+                ->get([
+                    'pe_ro_gr-id',
+                    'pe_ro_gr-per_id-fk',
+                    'pe_ro_gr-gr_op_id-fk',
+                    'pe_ro_gr-rol_id-fk',
+                    'pe_ro_gr-tipo_asignacion',
+                    'pe_ro_gr-orden_sust',
+                    'pe_ro_gr-fech_ini',
+                ]);
+            $titularesByRoleGroup = [];
+            $suplentesByRoleGroup = [];
+            foreach ($prgRows as $r) {
+                $perId = trim((string) ($r->{'pe_ro_gr-per_id-fk'} ?? ''));
+                $gid = trim((string) ($r->{'pe_ro_gr-gr_op_id-fk'} ?? ''));
+                $rolId = trim((string) ($r->{'pe_ro_gr-rol_id-fk'} ?? ''));
+                if ($perId === '' || $gid === '' || $rolId === '') {
+                    continue;
+                }
+                $tipo = strtoupper(trim((string) ($r->{'pe_ro_gr-tipo_asignacion'} ?? 'SUPLENTE')));
+                if ($tipo === 'LIDER') {
+                    $tipo = 'TITULAR';
+                }
+                $entry = [
+                    'per_id' => $perId,
+                    'orden' => (int) ($r->{'pe_ro_gr-orden_sust'} ?? 9999),
+                    'ini' => trim((string) ($r->{'pe_ro_gr-fech_ini'} ?? '')),
+                    'id' => trim((string) ($r->{'pe_ro_gr-id'} ?? '')),
+                ];
+                $key = $rolId.'|'.$gid;
+                if ($tipo === 'TITULAR') {
+                    $titularesByRoleGroup[$key][] = $entry;
+                } elseif ($tipo === 'SUPLENTE') {
+                    $suplentesByRoleGroup[$key][] = $entry;
+                }
+            }
+            $sortRows = static function (array &$rows): void {
+                usort($rows, static function (array $a, array $b): int {
+                    $ao = (int) ($a['orden'] ?? 9999);
+                    $bo = (int) ($b['orden'] ?? 9999);
+                    if ($ao !== $bo) {
+                        return $ao <=> $bo;
+                    }
+                    $ai = (string) ($a['ini'] ?? '');
+                    $bi = (string) ($b['ini'] ?? '');
+                    if ($ai !== $bi) {
+                        return strcmp($ai, $bi);
+                    }
+                    return strcmp((string) ($a['id'] ?? ''), (string) ($b['id'] ?? ''));
+                });
+            };
+            foreach ($titularesByRoleGroup as &$rows) {
+                $sortRows($rows);
+            }
+            unset($rows);
+            foreach ($suplentesByRoleGroup as &$rows) {
+                $sortRows($rows);
+            }
+            unset($rows);
+
+            $execRows = DB::table('ejecucion_accion_trs')
+                ->when(
+                    Schema::hasColumn('ejecucion_accion_trs', 'ej_ac-tenant_id'),
+                    static fn ($q) => $q->where('ej_ac-tenant_id', $tenantId),
+                )
+                ->where('ej_ac-ac_de_pl_id-fk', $activationId)
+                ->orderByDesc('ej_ac-ts_ini')
+                ->orderByDesc('ej_ac-id')
+                ->get([
+                    'ej_ac-id',
+                    'ej_ac-gr_op_id-fk',
+                    'ej_ac-ac_se_de_id-fk',
+                    'ej_ac-as_en_fu_id-fk',
+                    'ej_ac-estado',
+                ]);
+            $latestExecByKey = [];
+            foreach ($execRows as $ej) {
+                $gid = trim((string) ($ej->{'ej_ac-gr_op_id-fk'} ?? ''));
+                $detailId = trim((string) ($ej->{'ej_ac-ac_se_de_id-fk'} ?? ''));
+                if ($gid === '' || $detailId === '') {
+                    continue;
+                }
+                $key = $gid.'|'.$detailId;
+                if (! isset($latestExecByKey[$key])) {
+                    $latestExecByKey[$key] = $ej;
+                }
+            }
+            $detailIdsInPlan = [];
+            foreach (array_keys($latestExecByKey) as $key) {
+                [, $detailId] = explode('|', $key, 2);
+                $detailId = trim((string) $detailId);
+                if ($detailId !== '') {
+                    $detailIdsInPlan[$detailId] = true;
+                }
+            }
+            if (! empty($detailIdsInPlan)) {
+                $roleByDetailId = [];
+                $detailRows = DB::table('accion_set_detalle_cfg')
+                    ->when(
+                        Schema::hasColumn('accion_set_detalle_cfg', 'ac_se_de-tenant_id'),
+                        static fn ($q) => $q->where('ac_se_de-tenant_id', $tenantId),
+                    )
+                    ->whereIn('ac_se_de-id', array_keys($detailIdsInPlan))
+                    ->when(
+                        Schema::hasColumn('accion_set_detalle_cfg', 'ac_se_de-activo'),
+                        static fn ($q) => $q->whereRaw("UPPER(COALESCE(`ac_se_de-activo`, 'SI')) <> 'NO'"),
+                    )
+                    ->get(['ac_se_de-id', 'ac_se_de-rol_id-fk']);
+                foreach ($detailRows as $d) {
+                    $detailId = trim((string) ($d->{'ac_se_de-id'} ?? ''));
+                    $roleId = trim((string) ($d->{'ac_se_de-rol_id-fk'} ?? ''));
+                    if ($detailId !== '' && $roleId !== '') {
+                        $roleByDetailId[$detailId] = $roleId;
+                    }
+                }
+            }
+
+            $assignmentRows = DB::table('asignacion_en_funciones_trs')
+                ->when(
+                    Schema::hasColumn('asignacion_en_funciones_trs', 'as_en_fu-tenant_id'),
+                    static fn ($q) => $q->where('as_en_fu-tenant_id', $tenantId),
+                )
+                ->where('as_en_fu-ac_de_pl_id-fk', $activationId)
+                ->when(
+                    Schema::hasColumn('asignacion_en_funciones_trs', 'as_en_fu-estado'),
+                    static fn ($q) => $q->whereRaw("UPPER(COALESCE(`as_en_fu-estado`, 'ACTIVA')) NOT IN ('CERRADA','CERRADO')"),
+                )
+                ->when(
+                    Schema::hasColumn('asignacion_en_funciones_trs', 'as_en_fu-ts_fin'),
+                    static function ($q): void {
+                        $q->where(function ($sub): void {
+                            $sub->whereNull('as_en_fu-ts_fin')->orWhere('as_en_fu-ts_fin', '');
+                        });
+                    },
+                )
+                ->get([
+                    'as_en_fu-id',
+                    'as_en_fu-gr_op_id-fk',
+                    'as_en_fu-per_id-fk',
+                    'as_en_fu-tipo_asignacion',
+                ]);
+            $assignmentById = [];
+            $assignmentByKey = [];
+            foreach ($assignmentRows as $a) {
+                $id = trim((string) ($a->{'as_en_fu-id'} ?? ''));
+                $gid = trim((string) ($a->{'as_en_fu-gr_op_id-fk'} ?? ''));
+                $perId = trim((string) ($a->{'as_en_fu-per_id-fk'} ?? ''));
+                $tipo = strtoupper(trim((string) ($a->{'as_en_fu-tipo_asignacion'} ?? '')));
+                if ($id === '' || $gid === '' || $perId === '' || $tipo === '') {
+                    continue;
+                }
+                $assignmentById[$id] = $a;
+                $assignmentByKey[$gid.'|'.$perId.'|'.$tipo] = $id;
+            }
+
+            foreach ($latestExecByKey as $key => $ej) {
+                $status = strtoupper(trim((string) ($ej->{'ej_ac-estado'} ?? '')));
+                if (in_array($status, ['CONFIRMADO', 'COMPLETADA', 'COMPLETADO', 'FINALIZADA', 'FINALIZADO'], true)) {
+                    continue;
+                }
+
+                [$gid, $detailId] = explode('|', $key, 2);
+                $roleId = $roleByDetailId[$detailId] ?? '';
+                if ($gid === '' || $detailId === '' || $roleId === '') {
+                    continue;
+                }
+
+                $rgKey = $roleId.'|'.$gid;
+                $titularRows = $titularesByRoleGroup[$rgKey] ?? [];
+                $titularId = trim((string) ($titularRows[0]['per_id'] ?? ''));
+                if ($titularId === '') {
+                    continue;
+                }
+                if (($confirmedByPerson[$titularId] ?? false) === true) {
+                    continue;
+                }
+
+                $candidateRows = $suplentesByRoleGroup[$rgKey] ?? [];
+                $suplenteId = '';
+                foreach ($candidateRows as $c) {
+                    $pid = trim((string) ($c['per_id'] ?? ''));
+                    if ($pid !== '' && (($confirmedByPerson[$pid] ?? false) === true)) {
+                        $suplenteId = $pid;
+                        break;
+                    }
+                }
+                if ($suplenteId === '') {
+                    continue;
+                }
+
+                $currentAsignId = trim((string) ($ej->{'ej_ac-as_en_fu_id-fk'} ?? ''));
+                $currentAsign = $currentAsignId !== '' ? ($assignmentById[$currentAsignId] ?? null) : null;
+                $currentPerId = trim((string) ($currentAsign?->{'as_en_fu-per_id-fk'} ?? ''));
+                if ($currentPerId === $suplenteId) {
+                    continue;
+                }
+
+                $targetAsigKey = $gid.'|'.$suplenteId.'|SUPLENTE';
+                $targetAsigId = $assignmentByKey[$targetAsigKey] ?? '';
+                if ($targetAsigId === '') {
+                    $targetAsigId = 'ASEF-'.Str::uuid()->toString();
+                    if (! $dryRun) {
+                        DB::table('asignacion_en_funciones_trs')->insert([
+                            'as_en_fu-id' => $targetAsigId,
+                            'as_en_fu-tenant_id' => $tenantId,
+                            'as_en_fu-ac_de_pl_id-fk' => $activationId,
+                            'as_en_fu-gr_op_id-fk' => $gid,
+                            'as_en_fu-per_id-fk' => $suplenteId,
+                            'as_en_fu-per_id-fk-delegador' => $titularId,
+                            'as_en_fu-tipo_asignacion' => 'SUPLENTE',
+                            'as_en_fu-motivo' => 'AUTO_DELEGACION_VENCIMIENTO_CONFIRMACION',
+                            'as_en_fu-ts_ini' => $now->toDateTimeString(),
+                            'as_en_fu-ts_fin' => null,
+                            'as_en_fu-estado' => 'ACTIVA',
+                        ]);
+                    }
+                    $assignmentByKey[$targetAsigKey] = $targetAsigId;
+                }
+
+                if (! $dryRun) {
+                    DB::table('ejecucion_accion_trs')
+                        ->where('ej_ac-id', $ej->{'ej_ac-id'})
+                        ->update([
+                            'ej_ac-as_en_fu_id-fk' => $targetAsigId,
+                            'ej_ac-ts_ini' => $now->toDateTimeString(),
+                            'ej_ac-ts_fin' => null,
+                        ]);
+
+                    $auditLogger->log([
+                        'tenant_id' => $tenantId,
+                        'plan_id' => $activationId,
+                        'event_type' => 'delegation_auto',
+                        'module' => 'delegations',
+                        'entity_id' => $targetAsigId,
+                        'entity_type' => 'asignacion_en_funciones_trs',
+                        'previous_value' => [
+                            'accion_detalle_id' => $detailId,
+                            'grupo_id' => $gid,
+                            'titular_prev_per_id' => $titularId,
+                            'asignacion_prev_id' => $currentAsignId !== '' ? $currentAsignId : null,
+                        ],
+                        'new_value' => [
+                            'suplente_new_per_id' => $suplenteId,
+                            'asignacion_id' => $targetAsigId,
+                            'tipo_delegacion' => 'AUTO',
+                            'motivo' => 'Vencimiento tiempo conformación',
+                        ],
+                        'justification' => 'Autodelegación automática backend por vencimiento de confirmación',
+                    ]);
+                }
+
+                $delegatedActions++;
+            }
+        }
+    }
+
+    $this->info('Activaciones evaluadas: '.$processedActivations);
+    $this->info('Acciones autodelegadas: '.$delegatedActions.($dryRun ? ' (dry-run)' : ''));
+
+    return 0;
+})->purpose('Autodelega acciones vencidas al primer suplente confirmado sin depender de una pantalla');
+
+Schedule::command('activaciones:auto-delegar')->everyMinute();
 
 Artisan::command('activaciones:reset {--force}', function () {
     $tables = [

@@ -1,18 +1,18 @@
-Hit at 2026-04-10 15:07:19
+Hit at 2026-04-15 03:49:50
 Array
 (
     [ti_em_id] => TE01
-    [rie_id] => R03
-    [ni_al_id] => NA04
+    [rie_id] => R01
+    [ni_al_id] => NA03
     [per_id] => PER01
     [rol_id] => ROL04
     [cargo_declarado] => 
-    [fecha_activac] => 2026-04-10
-    [hora_activac] => 10:06
+    [fecha_activac] => 2026-04-14
+    [hora_activac] => 22:49
     [estado] => ACTIVA
-    [mensaje_inic] => PRUEBA NOTA OPERATIVA DE JSDK SDKF KSLAEJ FKS ADKFJ SAKFJN
+    [mensaje_inic] => sdss
     [mensaje_simul] => 
     [observ] => 
-    [info_adicional] => SDFDSDS
-    [justificacion] => 23
+    [info_adicional] => sd
+    [justificacion] => 6
 )
