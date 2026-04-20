@@ -155,9 +155,6 @@ Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function (
                 if ($perId === '' || $sentTs === '') {
                     continue;
                 }
-                if (\Carbon\Carbon::parse($sentTs, $timezone)->greaterThan($deadline)) {
-                    continue;
-                }
                 $noEnId = trim((string) ($s->{'no_en-id'} ?? ''));
                 if ($noEnId !== '') {
                     $notifIdsByPerson[$perId][] = $noEnId;
@@ -178,14 +175,9 @@ Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function (
                 $confirmedNotifIds = [];
                 foreach ($confirmRows as $c) {
                     $noEnId = trim((string) ($c->{'no_co-no_en_id-fk'} ?? ''));
-                    $ts = trim((string) ($c->{'no_co-ts'} ?? ''));
-                    if ($noEnId === '' || $ts === '') {
-                        continue;
+                    if ($noEnId !== '') {
+                        $confirmedNotifIds[$noEnId] = true;
                     }
-                    if (\Carbon\Carbon::parse($ts, $timezone)->greaterThan($deadline)) {
-                        continue;
-                    }
-                    $confirmedNotifIds[$noEnId] = true;
                 }
                 foreach ($notifIdsByPerson as $perId => $ids) {
                     foreach ($ids as $id) {
