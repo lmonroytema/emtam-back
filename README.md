@@ -221,10 +221,12 @@ El sistema permite seleccionar canal de notificación por tenant desde Admin:
 Campos de configuración:
 
 - `notifications_email_enabled`
+- `notifications_sms_enabled`
 - `notifications_channel`
 - `notifications_production_mode`
 - `test_notification_emails`
 - `test_notification_whatsapp_numbers`
+- `test_notification_sms_numbers`
 
 ### Variables `.env` para WhatsApp
 
@@ -236,11 +238,27 @@ BREVO_WHATSAPP_API_URL=https://api.brevo.com/v3/whatsapp/sendMessage
 WHATSAPP_WEBHOOK_URL=
 ```
 
+### Variables `.env` para SMS
+
+```env
+NOTIFICATIONS_SMS_PROVIDER=brevo
+BREVO_API_KEY=
+BREVO_SMS_SENDER=
+BREVO_SMS_API_URL=https://api.brevo.com/v3/transactionalSMS/sms
+SMS_WEBHOOK_URL=
+```
+
 Valores posibles de `NOTIFICATIONS_WHATSAPP_PROVIDER`:
 
 - `brevo`: envío directo por API de Brevo WhatsApp.
 - `webhook`: envía a `WHATSAPP_WEBHOOK_URL` para integrar otro proveedor.
 - `none`: deshabilita WhatsApp sin tocar correo.
+
+Valores posibles de `NOTIFICATIONS_SMS_PROVIDER`:
+
+- `brevo`: envío directo por API de Brevo SMS transaccional.
+- `webhook`: envía a `SMS_WEBHOOK_URL` para integrar otro proveedor.
+- `none`: deshabilita SMS sin tocar correo/WhatsApp.
 
 ## Hostinger + Brevo (plan básico)
 
@@ -269,7 +287,8 @@ php artisan view:cache
 4) En Admin del tenant:
 
 - Seleccionar canal `email`, `whatsapp` o `both`.
-- En PRUEBA cargar correos y/o WhatsApp de prueba según canal.
+- Habilitar/deshabilitar SMS.
+- En PRUEBA cargar correos, WhatsApp y/o SMS de prueba según canal y toggles.
 
 5) Requisitos Brevo para WhatsApp:
 

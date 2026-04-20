@@ -54,11 +54,13 @@ class TenantSettingsController extends Controller
                 'theme' => $tenant->theme,
                 'notifications_production_mode' => (bool) ($tenant->notifications_production_mode ?? false),
                 'notifications_email_enabled' => (bool) ($tenant->notifications_email_enabled ?? false),
-                'notifications_channel' => in_array((string) ($tenant->notifications_channel ?? 'email'), ['email', 'whatsapp', 'both'], true)
+                'notifications_sms_enabled' => (bool) ($tenant->notifications_sms_enabled ?? false),
+                'notifications_channel' => in_array((string) ($tenant->notifications_channel ?? 'email'), ['email', 'whatsapp', 'both', 'email_sms'], true)
                     ? (string) $tenant->notifications_channel
                     : 'email',
                 'test_notification_emails' => is_array($tenant->test_notification_emails) ? array_values($tenant->test_notification_emails) : [],
                 'test_notification_whatsapp_numbers' => is_array($tenant->test_notification_whatsapp_numbers) ? array_values($tenant->test_notification_whatsapp_numbers) : [],
+                'test_notification_sms_numbers' => is_array($tenant->test_notification_sms_numbers) ? array_values($tenant->test_notification_sms_numbers) : [],
                 'notifications_message_real' => $tenant->notifications_message_real,
                 'notifications_message_simulacrum' => $tenant->notifications_message_simulacrum,
                 'notifications_message_phase2' => $tenant->notifications_message_phase2,
@@ -132,10 +134,33 @@ class TenantSettingsController extends Controller
             }
             $testWhatsappNumbers = array_values(array_unique($numbers));
         }
+        $testSmsNumbers = null;
+        if (array_key_exists('test_notification_sms_numbers', $data)) {
+            $raw = $data['test_notification_sms_numbers'];
+            $rawArr = is_array($raw) ? $raw : [];
+            $numbers = [];
+            foreach ($rawArr as $n) {
+                $n = trim((string) $n);
+                if ($n === '') {
+                    continue;
+                }
+                $n = preg_replace('/[()\-\.\s]+/', '', $n) ?? '';
+                if (str_starts_with($n, '+')) {
+                    $digits = preg_replace('/\D+/', '', substr($n, 1)) ?? '';
+                    $n = $digits !== '' ? '+'.$digits : '';
+                } else {
+                    $n = preg_replace('/\D+/', '', $n) ?? '';
+                }
+                if ($n !== '') {
+                    $numbers[] = $n;
+                }
+            }
+            $testSmsNumbers = array_values(array_unique($numbers));
+        }
         $notificationsChannel = array_key_exists('notifications_channel', $data)
             ? strtolower(trim((string) $data['notifications_channel']))
             : strtolower(trim((string) ($tenant->notifications_channel ?? 'email')));
-        if (! in_array($notificationsChannel, ['email', 'whatsapp', 'both'], true)) {
+        if (! in_array($notificationsChannel, ['email', 'whatsapp', 'both', 'email_sms'], true)) {
             $notificationsChannel = 'email';
         }
         $productionMode = array_key_exists('notifications_production_mode', $data)
@@ -144,9 +169,13 @@ class TenantSettingsController extends Controller
         $emailEnabled = array_key_exists('notifications_email_enabled', $data)
             ? (bool) $data['notifications_email_enabled']
             : (bool) ($tenant->notifications_email_enabled ?? false);
+        $smsEnabled = array_key_exists('notifications_sms_enabled', $data)
+            ? (bool) $data['notifications_sms_enabled']
+            : (bool) ($tenant->notifications_sms_enabled ?? false);
         $effectiveTestEmails = $testEmails !== null ? $testEmails : (is_array($tenant->test_notification_emails) ? array_values($tenant->test_notification_emails) : []);
         $effectiveTestWhatsapp = $testWhatsappNumbers !== null ? $testWhatsappNumbers : (is_array($tenant->test_notification_whatsapp_numbers) ? array_values($tenant->test_notification_whatsapp_numbers) : []);
-        $channelUsesEmail = in_array($notificationsChannel, ['email', 'both'], true);
+        $effectiveTestSms = $testSmsNumbers !== null ? $testSmsNumbers : (is_array($tenant->test_notification_sms_numbers) ? array_values($tenant->test_notification_sms_numbers) : []);
+        $channelUsesEmail = in_array($notificationsChannel, ['email', 'both', 'email_sms'], true);
         $channelUsesWhatsapp = in_array($notificationsChannel, ['whatsapp', 'both'], true);
         if (! $productionMode && $channelUsesEmail && $emailEnabled && count($effectiveTestEmails) === 0) {
             return response()->json([
@@ -158,6 +187,12 @@ class TenantSettingsController extends Controller
             return response()->json([
                 'message' => 'En modo PRUEBA con canal whatsapp/both debes configurar al menos un WhatsApp de prueba.',
                 'errors' => ['test_notification_whatsapp_numbers' => ['At least one WhatsApp test number is required in test mode.']],
+            ], 422);
+        }
+        if (! $productionMode && $smsEnabled && count($effectiveTestSms) === 0) {
+            return response()->json([
+                'message' => 'En modo PRUEBA con SMS habilitado debes configurar al menos un número SMS de prueba.',
+                'errors' => ['test_notification_sms_numbers' => ['At least one SMS test number is required in test mode.']],
             ], 422);
         }
 
@@ -205,9 +240,11 @@ class TenantSettingsController extends Controller
             'theme' => array_key_exists('theme', $data) ? ($data['theme'] ?: null) : $tenant->theme,
             'notifications_production_mode' => $productionMode,
             'notifications_email_enabled' => $emailEnabled,
+            'notifications_sms_enabled' => $smsEnabled,
             'notifications_channel' => $notificationsChannel,
             'test_notification_emails' => $effectiveTestEmails,
             'test_notification_whatsapp_numbers' => $effectiveTestWhatsapp,
+            'test_notification_sms_numbers' => $effectiveTestSms,
             'notifications_message_real' => array_key_exists('notifications_message_real', $data)
                 ? $messageReal
                 : $tenant->notifications_message_real,
@@ -293,11 +330,13 @@ class TenantSettingsController extends Controller
                 'theme' => $tenant->theme,
                 'notifications_production_mode' => (bool) ($tenant->notifications_production_mode ?? false),
                 'notifications_email_enabled' => (bool) ($tenant->notifications_email_enabled ?? false),
-                'notifications_channel' => in_array((string) ($tenant->notifications_channel ?? 'email'), ['email', 'whatsapp', 'both'], true)
+                'notifications_sms_enabled' => (bool) ($tenant->notifications_sms_enabled ?? false),
+                'notifications_channel' => in_array((string) ($tenant->notifications_channel ?? 'email'), ['email', 'whatsapp', 'both', 'email_sms'], true)
                     ? (string) $tenant->notifications_channel
                     : 'email',
                 'test_notification_emails' => is_array($tenant->test_notification_emails) ? array_values($tenant->test_notification_emails) : [],
                 'test_notification_whatsapp_numbers' => is_array($tenant->test_notification_whatsapp_numbers) ? array_values($tenant->test_notification_whatsapp_numbers) : [],
+                'test_notification_sms_numbers' => is_array($tenant->test_notification_sms_numbers) ? array_values($tenant->test_notification_sms_numbers) : [],
                 'notifications_message_real' => $tenant->notifications_message_real,
                 'notifications_message_simulacrum' => $tenant->notifications_message_simulacrum,
                 'notifications_message_phase2' => $tenant->notifications_message_phase2,
