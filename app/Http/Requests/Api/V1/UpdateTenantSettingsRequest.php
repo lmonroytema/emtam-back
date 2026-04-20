@@ -35,6 +35,7 @@ class UpdateTenantSettingsRequest extends FormRequest
             'gps_min_lng' => ['sometimes', 'nullable', 'numeric', 'between:-180,180'],
             'gps_max_lng' => ['sometimes', 'nullable', 'numeric', 'between:-180,180'],
             'default_language' => ['sometimes', Rule::in(LanguageService::SUPPORTED)],
+            'timezone' => ['sometimes', 'string', Rule::in(timezone_identifiers_list())],
             'languages' => ['sometimes', 'array', 'min:1'],
             'languages.*' => ['required', Rule::in(LanguageService::SUPPORTED)],
             'conformacion_tiempo_limite' => ['sometimes', 'nullable', 'integer', 'min:0'],

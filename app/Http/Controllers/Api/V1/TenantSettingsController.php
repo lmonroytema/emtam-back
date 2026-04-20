@@ -30,7 +30,7 @@ class TenantSettingsController extends Controller
 
         $tenant = Tenant::query()->firstOrCreate(
             ['tenant_id' => $tenantId],
-            ['name' => $tenantId, 'default_language' => 'es'],
+            ['name' => $tenantId, 'default_language' => 'es', 'timezone' => 'Europe/Madrid'],
         );
 
         $this->ensureDefaultLanguageEnabled($tenant);
@@ -73,6 +73,7 @@ class TenantSettingsController extends Controller
                 'gps_min_lng' => $tenant->gps_min_lng,
                 'gps_max_lng' => $tenant->gps_max_lng,
                 'default_language' => $tenant->default_language,
+                'timezone' => $tenant->timezone ?: 'Europe/Madrid',
                 'conformacion_tiempo_limite' => $tenant->conformacion_tiempo_limite ?? 0,
                 'languages' => $enabled,
             ],
@@ -89,7 +90,7 @@ class TenantSettingsController extends Controller
 
         $tenant = Tenant::query()->firstOrCreate(
             ['tenant_id' => $tenantId],
-            ['name' => $tenantId, 'default_language' => 'es'],
+            ['name' => $tenantId, 'default_language' => 'es', 'timezone' => 'Europe/Madrid'],
         );
 
         $data = $request->validated();
@@ -230,6 +231,9 @@ class TenantSettingsController extends Controller
             'gps_min_lng' => $data['gps_min_lng'] ?? $tenant->gps_min_lng,
             'gps_max_lng' => $data['gps_max_lng'] ?? $tenant->gps_max_lng,
             'default_language' => $data['default_language'] ?? $tenant->default_language,
+            'timezone' => array_key_exists('timezone', $data)
+                ? (string) $data['timezone']
+                : ($tenant->timezone ?: 'Europe/Madrid'),
             'conformacion_tiempo_limite' => array_key_exists('conformacion_tiempo_limite', $data)
                 ? (int) $data['conformacion_tiempo_limite']
                 : ($tenant->conformacion_tiempo_limite ?? 0),
@@ -308,6 +312,7 @@ class TenantSettingsController extends Controller
                 'gps_min_lng' => $tenant->gps_min_lng,
                 'gps_max_lng' => $tenant->gps_max_lng,
                 'default_language' => $tenant->default_language,
+                'timezone' => $tenant->timezone ?: 'Europe/Madrid',
                 'conformacion_tiempo_limite' => $tenant->conformacion_tiempo_limite ?? 0,
                 'languages' => $enabled,
             ],
@@ -328,7 +333,7 @@ class TenantSettingsController extends Controller
 
         $tenant = Tenant::query()->firstOrCreate(
             ['tenant_id' => $tenantId],
-            ['name' => $tenantId, 'default_language' => 'es'],
+            ['name' => $tenantId, 'default_language' => 'es', 'timezone' => 'Europe/Madrid'],
         );
 
         $file = $validated['logo'];
@@ -382,7 +387,7 @@ class TenantSettingsController extends Controller
 
         $tenant = Tenant::query()->firstOrCreate(
             ['tenant_id' => $tenantId],
-            ['name' => $tenantId, 'default_language' => 'es'],
+            ['name' => $tenantId, 'default_language' => 'es', 'timezone' => 'Europe/Madrid'],
         );
 
         return response()->json([

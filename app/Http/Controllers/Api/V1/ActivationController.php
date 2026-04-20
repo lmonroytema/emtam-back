@@ -2477,6 +2477,25 @@ class ActivationController extends Controller
         $validated = $request->validate([
             'detalle' => ['nullable', 'string'],
         ]);
+        $tenantNow = $this->tenantNow($tenantId);
+        $activationRow = Schema::hasTable('activacion_del_plan_trs')
+            ? DB::table('activacion_del_plan_trs')
+                ->where('ac_de_pl-tenant_id', $tenantId)
+                ->where('ac_de_pl-id', $activationId)
+                ->first()
+            : null;
+        $activationPerId = trim((string) ($activationRow?->{'ac_de_pl-per_id-fk-activador'} ?? ''));
+        $activationGroupId = null;
+        if ($activationPerId !== '' && Schema::hasTable('persona_rol_grupo_cfg')) {
+            $activationGroupId = DB::table('persona_rol_grupo_cfg')
+                ->when(
+                    Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-tenant_id'),
+                    static fn ($q) => $q->where('pe_ro_gr-tenant_id', $tenantId),
+                )
+                ->where('pe_ro_gr-per_id-fk', $activationPerId)
+                ->orderByDesc('pe_ro_gr-id')
+                ->value('pe_ro_gr-gr_op_id-fk');
+        }
 
         if (
             ! Schema::hasTable('ejecucion_accion_trs')
@@ -2535,6 +2554,20 @@ class ActivationController extends Controller
 
         $people = array_values($byPerson);
         if (empty($people)) {
+            if (Schema::hasTable('cronologia_emergencia_trs')) {
+                DB::table('cronologia_emergencia_trs')->insert([
+                    'cr_em-id' => 'CREM-'.Str::uuid()->toString(),
+                    'cr_em-tenant_id' => $tenantId,
+                    'cr_em-ac_de_pl_id-fk' => $activationId,
+                    'cr_em-tipo_emergencia' => 'FIN',
+                    'cr_em-ts_emergencia' => $tenantNow->toDateTimeString(),
+                    'cr_em-per_id-fk' => $activationPerId !== '' ? $activationPerId : null,
+                    'cr_em-gr_op_id-fk' => $activationGroupId,
+                    'cr_em-detalle' => 'Finalización del plan',
+                    'cr_em-ref_tabla' => 'notificacion_envio_trs',
+                    'cr_em-referencia' => null,
+                ]);
+            }
             return response()->json([
                 'message' => 'OK',
                 'mode' => $this->resolveNotificationMode(),
@@ -2765,9 +2798,9 @@ class ActivationController extends Controller
                 'cr_em-tenant_id' => $tenantId,
                 'cr_em-ac_de_pl_id-fk' => $activationId,
                 'cr_em-tipo_emergencia' => $label,
-                'cr_em-ts_emergencia' => now()->toDateTimeString(),
-                'cr_em-per_id-fk' => null,
-                'cr_em-gr_op_id-fk' => null,
+                'cr_em-ts_emergencia' => $tenantNow->toDateTimeString(),
+                'cr_em-per_id-fk' => $activationPerId !== '' ? $activationPerId : null,
+                'cr_em-gr_op_id-fk' => $activationGroupId,
                 'cr_em-detalle' => $subject.($detalle !== '' ? (': '.$detalle) : ''),
                 'cr_em-ref_tabla' => 'notificacion_envio_trs',
                 'cr_em-referencia' => null,
@@ -2866,13 +2899,27 @@ class ActivationController extends Controller
                     ->delete();
             }
 
-            if (Schema::hasTable('notificacion_confirmacion_trs') && $notificacionEnvioIds->isNotEmpty()) {
+            if (Schema::hasTable('notificacion_confirmacion_trs')) {
                 $counts['notificacion_confirmacion'] = DB::table('notificacion_confirmacion_trs')
                     ->when(
                         Schema::hasColumn('notificacion_confirmacion_trs', 'no_co-tenant_id'),
                         static fn ($q) => $q->where('no_co-tenant_id', $tenantId),
                     )
-                    ->whereIn('no_co-no_en_id-fk', $notificacionEnvioIds)
+                    ->when(
+                        $notificacionEnvioIds->isNotEmpty(),
+                        static fn ($q) => $q->whereIn('no_co-no_en_id-fk', $notificacionEnvioIds),
+                        static fn ($q) => $q->whereRaw('1 = 0'),
+                    )
+                    ->delete();
+
+                $counts['notificacion_confirmacion'] += DB::table('notificacion_confirmacion_trs')
+                    ->when(
+                        Schema::hasColumn('notificacion_confirmacion_trs', 'no_co-tenant_id'),
+                        static fn ($q) => $q->where('no_co-tenant_id', $tenantId),
+                    )
+                    ->where(function ($q): void {
+                        $q->whereNull('no_co-no_en_id-fk')->orWhere('no_co-no_en_id-fk', '');
+                    })
                     ->delete();
             }
 
@@ -3146,30 +3193,131 @@ class ActivationController extends Controller
 
         $noEnId = null;
         if (Schema::hasTable('notificacion_envio_trs')) {
-            $last = DB::table('notificacion_envio_trs')
-                ->where('no_en-tenant_id', $tenantId)
-                ->where('no_en-ac_de_pl_id-fk', $activationId)
-                ->where('no_en-per_id-fk', $perId)
-                ->orderBy('no_en-ts', 'DESC')
-                ->orderBy('no_en-id', 'DESC')
-                ->first();
+            $buildNotifQuery = static function () use ($activationId, $perId) {
+                return DB::table('notificacion_envio_trs')
+                    ->where('no_en-ac_de_pl_id-fk', $activationId)
+                    ->where('no_en-per_id-fk', $perId)
+                    ->orderBy('no_en-ts', 'DESC')
+                    ->orderBy('no_en-id', 'DESC');
+            };
+
+            $query = $buildNotifQuery();
+            if (Schema::hasColumn('notificacion_envio_trs', 'no_en-tenant_id')) {
+                $query->where('no_en-tenant_id', $tenantId);
+            }
+            $last = $query->first();
+
+            // Fallback: en algunos históricos no_en-tenant_id no está poblado.
+            if ($last === null) {
+                $last = $buildNotifQuery()->first();
+            }
             $noEnId = trim((string) ($last?->{'no_en-id'} ?? '')) ?: null;
         }
 
-        if (Schema::hasTable('notificacion_confirmacion_trs')) {
-            DB::table('notificacion_confirmacion_trs')->insert([
-                'no_co-id' => 'NOCO-'.Str::uuid()->toString(),
-                'no_co-tenant_id' => $tenantId,
-                'no_co-no_en_id-fk' => $noEnId,
-                'no_co-confirmado' => 'SI',
-                'no_co-ts' => now()->toDateTimeString(),
-                'no_co-respuesta' => $validated['respuesta'] ?? null,
-            ]);
+        $confirmationRequiresNotifId = Schema::hasTable('notificacion_confirmacion_trs')
+            && Schema::hasColumn('notificacion_confirmacion_trs', 'no_co-no_en_id-fk');
+        if ($confirmationRequiresNotifId && $noEnId === null) {
+            if (! Schema::hasTable('notificacion_envio_trs') || ! Schema::hasColumn('notificacion_envio_trs', 'no_en-id')) {
+                return response()->json([
+                    'message' => 'No se pudo vincular la confirmación con su notificación de envío.',
+                    'code' => 'CONFIRMATION_NOTIF_LINK_MISSING',
+                ], 422);
+            }
+
+            $syntheticNoEnId = 'NOEN-'.Str::uuid()->toString();
+            $syntheticInsert = [];
+            if (Schema::hasColumn('notificacion_envio_trs', 'no_en-id')) {
+                $syntheticInsert['no_en-id'] = $syntheticNoEnId;
+            }
+            if (Schema::hasColumn('notificacion_envio_trs', 'no_en-tenant_id')) {
+                $syntheticInsert['no_en-tenant_id'] = $tenantId;
+            }
+            if (Schema::hasColumn('notificacion_envio_trs', 'no_en-ac_de_pl_id-fk')) {
+                $syntheticInsert['no_en-ac_de_pl_id-fk'] = $activationId;
+            }
+            if (Schema::hasColumn('notificacion_envio_trs', 'no_en-per_id-fk')) {
+                $syntheticInsert['no_en-per_id-fk'] = $perId;
+            }
+            if (Schema::hasColumn('notificacion_envio_trs', 'no_en-gr_op_id-fk')) {
+                $syntheticInsert['no_en-gr_op_id-fk'] = null;
+            }
+            if (Schema::hasColumn('notificacion_envio_trs', 'no_en-rol_id-fk')) {
+                $syntheticInsert['no_en-rol_id-fk'] = null;
+            }
+            if (Schema::hasColumn('notificacion_envio_trs', 'no_en-ca_co_id-fk')) {
+                $syntheticInsert['no_en-ca_co_id-fk'] = null;
+            }
+            if (Schema::hasColumn('notificacion_envio_trs', 'no_en-mensaje')) {
+                $syntheticInsert['no_en-mensaje'] = 'Registro técnico para vincular confirmación de disponibilidad';
+            }
+            if (Schema::hasColumn('notificacion_envio_trs', 'no_en-ts')) {
+                $syntheticInsert['no_en-ts'] = now()->toDateTimeString();
+            }
+            if (Schema::hasColumn('notificacion_envio_trs', 'no_en-estado')) {
+                $syntheticInsert['no_en-estado'] = 'ENVIADO';
+            }
+            if (Schema::hasColumn('notificacion_envio_trs', 'no_en-num_de_intento')) {
+                $syntheticInsert['no_en-num_de_intento'] = '0';
+            }
+            if (Schema::hasColumn('notificacion_envio_trs', 'no_en-modo')) {
+                $syntheticInsert['no_en-modo'] = 'EMAIL';
+            }
+
+            DB::table('notificacion_envio_trs')->insert($syntheticInsert);
+            $noEnId = $syntheticNoEnId;
         }
+
+        $insertedConfirmation = false;
+        if (Schema::hasTable('notificacion_confirmacion_trs')) {
+            $payload = [];
+            if (Schema::hasColumn('notificacion_confirmacion_trs', 'no_co-id')) {
+                $payload['no_co-id'] = 'NOCO-'.Str::uuid()->toString();
+            }
+            if (Schema::hasColumn('notificacion_confirmacion_trs', 'no_co-tenant_id')) {
+                $payload['no_co-tenant_id'] = $tenantId;
+            }
+            if (Schema::hasColumn('notificacion_confirmacion_trs', 'no_co-no_en_id-fk')) {
+                $payload['no_co-no_en_id-fk'] = $noEnId;
+            }
+            if (Schema::hasColumn('notificacion_confirmacion_trs', 'no_co-confirmado')) {
+                $payload['no_co-confirmado'] = 'SI';
+            }
+            if (Schema::hasColumn('notificacion_confirmacion_trs', 'no_co-ts')) {
+                $payload['no_co-ts'] = now()->toDateTimeString();
+            }
+            if (Schema::hasColumn('notificacion_confirmacion_trs', 'no_co-respuesta')) {
+                $payload['no_co-respuesta'] = $validated['respuesta'] ?? null;
+            }
+
+            if (! empty($payload)) {
+                DB::table('notificacion_confirmacion_trs')->insert($payload);
+                $insertedConfirmation = true;
+            }
+        }
+
+        $this->auditLogger->logFromRequest($request, [
+            'event_type' => 'action_status_changed',
+            'module' => 'actions',
+            'plan_id' => $activationId,
+            'entity_type' => 'notificacion_confirmacion_trs',
+            'entity_id' => $noEnId,
+            'previous_value' => [
+                'confirmado' => 'NO',
+            ],
+            'new_value' => [
+                'confirmado' => 'SI',
+                'respuesta' => $validated['respuesta'] ?? null,
+                'acciones_actualizadas' => (int) $updated,
+                'persona_id' => $perId,
+            ],
+            'justification' => 'Confirmación de disponibilidad desde Pantalla 2',
+        ]);
 
         return response()->json([
             'message' => 'OK',
             'updated' => $updated,
+            'confirmation_inserted' => $insertedConfirmation,
+            'confirmation_notif_id' => $noEnId,
         ]);
     }
 
@@ -3705,6 +3853,10 @@ class ActivationController extends Controller
         }
 
         return DB::transaction(function () use ($tenantId, $activationId, $newLevelId, $perId, $rolId, $justification, $request) {
+            $tenantNow = $this->tenantNow($tenantId);
+            $currentDate = $tenantNow->toDateString();
+            $currentTime = $tenantNow->toTimeString();
+            $currentTs = $tenantNow->toDateTimeString();
             $activation = DB::table('activacion_del_plan_trs')
                 ->where('ac_de_pl-tenant_id', $tenantId)
                 ->where('ac_de_pl-id', $activationId)
@@ -3761,8 +3913,8 @@ class ActivationController extends Controller
                     'ac_ni_hi-ac_de_pl_id-fk' => $activationId,
                     'ac_ni_hi-ni_al_id-fk' => $newLevelId,
                     'ac_ni_hi-ac_se_id-fk' => $actionSetId,
-                    'ac_ni_hi-fech_ini' => now()->toDateString(),
-                    'ac_ni_hi-hora_ini' => now()->toTimeString(),
+                    'ac_ni_hi-fech_ini' => $currentDate,
+                    'ac_ni_hi-hora_ini' => $currentTime,
                     'ac_ni_hi-fech_fin' => null,
                     'ac_ni_hi-hora_fin' => null,
                     'ac_ni_hi-nivel_inicial' => 'NO',
@@ -3898,7 +4050,7 @@ class ActivationController extends Controller
                                     'as_en_fu-per_id-fk' => $defaultPerId,
                                     'as_en_fu-tipo_asignacion' => $defaultTipoAsignacion !== '' ? $defaultTipoAsignacion : 'TITULAR',
                                     'as_en_fu-motivo' => 'GENERACION_AUTOMATICA_CAMBIO_NIVEL',
-                                    'as_en_fu-ts_ini' => now()->toDateTimeString(),
+                                    'as_en_fu-ts_ini' => $currentTs,
                                     'as_en_fu-estado' => 'ACTIVA',
                                 ]);
                             }
@@ -3917,7 +4069,7 @@ class ActivationController extends Controller
                             'ej_ac-ac_se_de_id-fk' => $detalleId,
                             'ej_ac-as_en_fu_id-fk' => $asignacionId,
                             'ej_ac-estado' => 'PENDIENTE',
-                            'ej_ac-ts_ini' => now()->toDateTimeString(),
+                            'ej_ac-ts_ini' => $currentTs,
                             'ej_ac-observ' => 'Regenerado por cambio de nivel',
                         ]);
                         $createdCount++;
@@ -3948,6 +4100,84 @@ class ActivationController extends Controller
                 'message' => 'Level changed successfully.',
                 'new_level_id' => $newLevelId,
                 'actions_created' => $createdCount,
+            ]);
+        });
+    }
+
+    public function finalizeActivation(Request $request, string $activationId): JsonResponse
+    {
+        $tenantId = $this->tenantContext->tenantId();
+        if ($tenantId === null) {
+            return response()->json(['message' => __('messages.tenant.missing')], 422);
+        }
+
+        $activationId = trim($activationId);
+        if ($activationId === '') {
+            return response()->json(['message' => 'Invalid activation id.'], 422);
+        }
+
+        if (! Schema::hasTable('activacion_del_plan_trs')) {
+            return response()->json(['message' => 'Missing activacion_del_plan_trs table.'], 422);
+        }
+
+        return DB::transaction(function () use ($tenantId, $activationId, $request) {
+            $activation = DB::table('activacion_del_plan_trs')
+                ->where('ac_de_pl-tenant_id', $tenantId)
+                ->where('ac_de_pl-id', $activationId)
+                ->first();
+            if (! $activation) {
+                return response()->json(['message' => 'Activation not found.'], 404);
+            }
+
+            $tenantNow = $this->tenantNow($tenantId);
+            $currentDate = $tenantNow->toDateString();
+            $currentTime = $tenantNow->toTimeString();
+
+            $closedLevels = 0;
+            if (Schema::hasTable('activacion_nivel_hist_trs')) {
+                $closedLevels = DB::table('activacion_nivel_hist_trs')
+                    ->where('ac_ni_hi-tenant_id', $tenantId)
+                    ->where('ac_ni_hi-ac_de_pl_id-fk', $activationId)
+                    ->where(function ($q): void {
+                        $q->whereRaw("UPPER(COALESCE(`ac_ni_hi-activo`, 'SI')) <> 'NO'")
+                            ->orWhereNull('ac_ni_hi-fech_fin')
+                            ->orWhereNull('ac_ni_hi-hora_fin')
+                            ->orWhere('ac_ni_hi-fech_fin', '')
+                            ->orWhere('ac_ni_hi-hora_fin', '');
+                    })
+                    ->update([
+                        'ac_ni_hi-fech_fin' => $currentDate,
+                        'ac_ni_hi-hora_fin' => $currentTime,
+                        'ac_ni_hi-activo' => 'NO',
+                    ]);
+            }
+
+            DB::table('activacion_del_plan_trs')
+                ->where('ac_de_pl-tenant_id', $tenantId)
+                ->where('ac_de_pl-id', $activationId)
+                ->update([
+                    'ac_de_pl-estado' => 'FINALIZADA',
+                ]);
+
+            $this->auditLogger->logFromRequest($request, [
+                'event_type' => 'plan_status_changed',
+                'module' => 'activation',
+                'plan_id' => $activationId,
+                'entity_id' => $activationId,
+                'entity_type' => 'activacion_del_plan_trs',
+                'previous_value' => [
+                    'estado' => $activation->{'ac_de_pl-estado'} ?? null,
+                ],
+                'new_value' => [
+                    'estado' => 'FINALIZADA',
+                ],
+                'justification' => 'Finalización del plan',
+            ]);
+
+            return response()->json([
+                'message' => 'Activation finalized.',
+                'closed_levels' => (int) $closedLevels,
+                'finalized_at' => $tenantNow->toDateTimeString(),
             ]);
         });
     }
@@ -4787,6 +5017,7 @@ class ActivationController extends Controller
 
         $lastNotificationByPerson = [];
         $confirmedNotificationIds = [];
+        $confirmedByExecutionPerson = [];
         if (Schema::hasTable('notificacion_envio_trs')) {
             $sent = DB::table('notificacion_envio_trs')
                 ->when(
@@ -4837,6 +5068,28 @@ class ActivationController extends Controller
                     if ($confirmado === '' || $confirmado === 'SI' || $confirmado === 'S' || $confirmado === '1' || $confirmado === 'TRUE') {
                         $confirmedNotificationIds[$noEnId] = true;
                     }
+                }
+            }
+        }
+
+        if (Schema::hasTable('ejecucion_accion_trs') && Schema::hasTable('asignacion_en_funciones_trs')) {
+            $confirmedRows = DB::table('ejecucion_accion_trs as ej')
+                ->join('asignacion_en_funciones_trs as asg', 'asg.as_en_fu-id', '=', 'ej.ej_ac-as_en_fu_id-fk')
+                ->when(
+                    Schema::hasColumn('ejecucion_accion_trs', 'ej_ac-tenant_id'),
+                    static fn ($q) => $q->where('ej.ej_ac-tenant_id', $tenantId),
+                )
+                ->when(
+                    Schema::hasColumn('asignacion_en_funciones_trs', 'as_en_fu-tenant_id'),
+                    static fn ($q) => $q->where('asg.as_en_fu-tenant_id', $tenantId),
+                )
+                ->where('ej.ej_ac-ac_de_pl_id-fk', $activationId)
+                ->whereRaw("UPPER(COALESCE(`ej`.`ej_ac-estado`, '')) IN ('CONFIRMADO','CONFIRMADA')")
+                ->get(['asg.as_en_fu-per_id-fk']);
+            foreach ($confirmedRows as $row) {
+                $pid = trim((string) ($row->{'as_en_fu-per_id-fk'} ?? ''));
+                if ($pid !== '') {
+                    $confirmedByExecutionPerson[$pid] = true;
                 }
             }
         }
@@ -4893,6 +5146,10 @@ class ActivationController extends Controller
                     $persona['estado_disponibilidad'] = $noEnId !== '' && array_key_exists($noEnId, $confirmedNotificationIds)
                         ? 'CONFIRMADO'
                         : 'PENDIENTE';
+                } elseif (array_key_exists($perId, $confirmedByExecutionPerson)) {
+                    $persona['estado_disponibilidad'] = 'CONFIRMADO';
+                } else {
+                    $persona['estado_disponibilidad'] = 'PENDIENTE';
                 }
                 $assignByGrupo[$gid] ??= ['TITULAR' => [], 'SUPLENTE' => []];
                 $assignByGrupo[$gid][$tipo][] = [
@@ -5621,5 +5878,19 @@ class ActivationController extends Controller
         }
         
         return $actionSetIds;
+    }
+
+    private function tenantNow(string $tenantId): Carbon
+    {
+        $timezone = 'Europe/Madrid';
+        if (Schema::hasTable('tenants')) {
+            $tenant = DB::table('tenants')->where('tenant_id', $tenantId)->first();
+            $candidate = trim((string) ($tenant?->timezone ?? ''));
+            if ($candidate !== '' && in_array($candidate, timezone_identifiers_list(), true)) {
+                $timezone = $candidate;
+            }
+        }
+
+        return Carbon::now($timezone);
     }
 }

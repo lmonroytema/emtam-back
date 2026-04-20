@@ -32,6 +32,7 @@ Route::prefix('v1')->group(function () {
         Route::get('activacion/{activationId}/control/access', [ActivationController::class, 'checkControlPanelAccess']);
         Route::post('activacion/{activationId}/control/access', [ActivationController::class, 'grantControlPanelAccess']);
         Route::put('activacion/{activationId}/nivel', [ActivationController::class, 'changeLevel']);
+        Route::post('activacion/{activationId}/finalizar', [ActivationController::class, 'finalizeActivation']);
         Route::post('activacion/{activationId}/notificaciones/enviar', [ActivationController::class, 'sendNotifications']);
         Route::post('activacion/{activationId}/notificaciones/titular', [ActivationController::class, 'sendTitularChangeNotification']);
         Route::post('activacion/{activationId}/notificaciones/resumen', [ActivationController::class, 'sendSummaryNotifications']);
