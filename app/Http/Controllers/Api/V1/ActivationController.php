@@ -24,6 +24,8 @@ use Illuminate\Validation\ValidationException;
 
 class ActivationController extends Controller
 {
+    private array $tenantTimezoneCache = [];
+
     public function __construct(
         private readonly TenantContext $tenantContext,
         private readonly AuditLogger $auditLogger,
@@ -47,8 +49,8 @@ class ActivationController extends Controller
             'per_id' => ['nullable', 'string'],
             'rol_id' => ['nullable', 'string'],
             'cargo_declarado' => ['nullable', 'string'],
-            'fecha_activac' => ['required', 'string'],
-            'hora_activac' => ['required', 'string'],
+            'fecha_activac' => ['nullable', 'string'],
+            'hora_activac' => ['nullable', 'string'],
             'estado' => ['required', 'string'],
             'mensaje_inic' => ['nullable', 'string'],
             'mensaje_simul' => ['nullable', 'string'],
@@ -115,9 +117,14 @@ class ActivationController extends Controller
 
         return DB::transaction(function () use ($data, $tenantId, $activationId, $request, $resolvedPerId, $resolvedRolId) {
             try {
-                if (! Schema::hasTable('activacion_del_plan_trs')) {
+            if (! Schema::hasTable('activacion_del_plan_trs')) {
                 return response()->json(['message' => 'Missing activacion_del_plan_trs table.'], 422);
             }
+
+            $activationNow = $this->tenantNow($tenantId);
+            $activationDate = $activationNow->toDateString();
+            $activationTime = $activationNow->toTimeString();
+            $activationTs = $activationNow->toDateTimeString();
 
             $niAl = Schema::hasTable('nivel_alerta_cat')
                 ? DB::table('nivel_alerta_cat')->where('ni_al-id', $data['ni_al_id'])->first()
@@ -182,8 +189,8 @@ class ActivationController extends Controller
                 'ac_de_pl-per_id-fk-activador' => $resolvedPerId,
                 'ac_de_pl-rol_id-fk-activador' => $resolvedRolId,
                 'ac_de_pl-cargo_declarado' => $data['cargo_declarado'] ?? null,
-                'ac_de_pl-fecha_activac' => $data['fecha_activac'],
-                'ac_de_pl-hora_activac' => $data['hora_activac'],
+                'ac_de_pl-fecha_activac' => $activationDate,
+                'ac_de_pl-hora_activac' => $activationTime,
                 'ac_de_pl-estado' => $estadoGuardado,
                 'ac_de_pl-mensaje_inic' => $data['mensaje_inic'] ?? null,
                 'ac_de_pl-mensaje_simul' => $data['mensaje_simul'] ?? null,
@@ -206,7 +213,7 @@ class ActivationController extends Controller
                     'no_op-ac_de_pl_id-fk' => $activationId,
                     'no_op-gr_op_id-fk' => $activatorGroupId,
                     'no_op-per_id-fk' => $resolvedPerId,
-                    'no_op-ts_nota' => now()->toDateTimeString(),
+                    'no_op-ts_nota' => $activationTs,
                     'no_op-texto' => $initialMessageNote,
                     'no_op-visibilidad' => 'INTERNA',
                 ];
@@ -222,7 +229,7 @@ class ActivationController extends Controller
                     'cr_em-tenant_id' => $tenantId,
                     'cr_em-ac_de_pl_id-fk' => $activationId,
                     'cr_em-tipo_emergencia' => $scenario,
-                    'cr_em-ts_emergencia' => now()->toDateTimeString(),
+                    'cr_em-ts_emergencia' => $activationTs,
                     'cr_em-per_id-fk' => $resolvedPerId,
                     'cr_em-gr_op_id-fk' => $activatorGroupId,
                     'cr_em-detalle' => 'Activación del plan: '.($data['mensaje_inic'] ?? 'Sin mensaje inicial'),
@@ -246,7 +253,7 @@ class ActivationController extends Controller
                 ],
             ]);
 
-            $now = now()->toDateTimeString();
+            $now = $activationTs;
             $warnings = [];
 
             $actionSetIds = $this->getActionSets($tenantId, $data['rie_id'], $data['ni_al_id']);
@@ -267,8 +274,8 @@ class ActivationController extends Controller
                     'ac_ni_hi-ac_de_pl_id-fk' => $activationId,
                     'ac_ni_hi-ni_al_id-fk' => $data['ni_al_id'],
                     'ac_ni_hi-ac_se_id-fk' => $actionSetIds[0] ?? null,
-                    'ac_ni_hi-fech_ini' => $data['fecha_activac'],
-                    'ac_ni_hi-hora_ini' => $data['hora_activac'],
+                    'ac_ni_hi-fech_ini' => $activationDate,
+                    'ac_ni_hi-hora_ini' => $activationTime,
                     'ac_ni_hi-fech_fin' => null,
                     'ac_ni_hi-hora_fin' => null,
                     'ac_ni_hi-nivel_inicial' => 'SI',
@@ -860,7 +867,7 @@ class ActivationController extends Controller
         };
         $appendDebugEvent([
             'stage' => 'notification_start',
-            'ts' => now()->toDateTimeString(),
+            'ts' => $this->tenantNowDateTime($tenantId),
             'tenant_id' => $tenantId,
             'activation_id' => $activationId,
             'production_mode' => $productionMode,
@@ -911,7 +918,7 @@ class ActivationController extends Controller
             $warnings[] = 'No se resolvieron destinatarios para esta activación.';
             $appendDebugEvent([
                 'stage' => 'no_recipients_resolved',
-                'ts' => now()->toDateTimeString(),
+                'ts' => $this->tenantNowDateTime($tenantId),
                 'target_filter_count' => count($targetEmails),
                 'production_mode' => $productionMode,
             ]);
@@ -920,7 +927,7 @@ class ActivationController extends Controller
             $warnings[] = 'Envío de correos desactivado en configuración del tenant.';
             $appendDebugEvent([
                 'stage' => 'email_notifications_disabled',
-                'ts' => now()->toDateTimeString(),
+                'ts' => $this->tenantNowDateTime($tenantId),
                 'tenant_id' => $tenantId,
                 'activation_id' => $activationId,
             ]);
@@ -940,7 +947,7 @@ class ActivationController extends Controller
             'activation_id' => $activationId,
             'tenant_id' => $tenantId,
             'mode' => $mode,
-            'generated_at' => now()->toDateTimeString(),
+            'generated_at' => $this->tenantNowDateTime($tenantId),
             'recipients' => [],
         ];
 
@@ -1182,7 +1189,7 @@ class ActivationController extends Controller
                         'activation_id' => $activationId,
                         'tenant_id' => $tenantId,
                         'mode' => $mode,
-                        'generated_at' => now()->toDateTimeString(),
+                        'generated_at' => $this->tenantNowDateTime($tenantId),
                         'subject' => $subject,
                         'persona' => [
                             'per_id' => (string) ($p['per_id'] ?? ''),
@@ -1200,7 +1207,7 @@ class ActivationController extends Controller
                         if (! $emailNotificationsEnabled) {
                             $appendDebugEvent([
                                 'stage' => 'skip_person_email_disabled',
-                                'ts' => now()->toDateTimeString(),
+                                'ts' => $this->tenantNowDateTime($tenantId),
                                 'per_id' => (string) ($p['per_id'] ?? ''),
                                 'email' => $to,
                             ]);
@@ -1230,7 +1237,7 @@ class ActivationController extends Controller
                         }
                         $appendDebugEvent([
                             'stage' => 'send_person_email',
-                            'ts' => now()->toDateTimeString(),
+                            'ts' => $this->tenantNowDateTime($tenantId),
                             'per_id' => (string) ($p['per_id'] ?? ''),
                             'email' => $to,
                             'sent' => $emailSent,
@@ -1249,7 +1256,7 @@ class ActivationController extends Controller
                         $emailError = 'email destinatario no válido o ausente';
                         $appendDebugEvent([
                             'stage' => 'skip_person_email_invalid',
-                            'ts' => now()->toDateTimeString(),
+                            'ts' => $this->tenantNowDateTime($tenantId),
                             'per_id' => (string) ($p['per_id'] ?? ''),
                             'email' => $rawTo !== '' ? strtolower($rawTo) : null,
                             'reason' => $emailError,
@@ -1280,7 +1287,7 @@ class ActivationController extends Controller
                         'no_en-rol_id-fk' => null,
                         'no_en-ca_co_id-fk' => null,
                         'no_en-mensaje' => $notificationMessage !== '' ? $notificationMessage : $subject,
-                        'no_en-ts' => now()->toDateTimeString(),
+                        'no_en-ts' => $this->tenantNowDateTime($tenantId),
                         'no_en-estado' => $mode === 'file' ? 'SIMULADO' : ($emailSent ? 'ENVIADO' : 'SIMULADO'),
                         'no_en-num_de_intento' => '0',
                     ];
@@ -1333,7 +1340,7 @@ class ActivationController extends Controller
                         'activation_id' => $activationId,
                         'tenant_id' => $tenantId,
                         'mode' => $mode,
-                        'generated_at' => now()->toDateTimeString(),
+                        'generated_at' => $this->tenantNowDateTime($tenantId),
                         'subject' => $subject,
                         'destino_prueba' => $testEmail,
                         'personas' => array_map(static fn ($p) => [
@@ -1347,7 +1354,7 @@ class ActivationController extends Controller
                     if (! $emailNotificationsEnabled) {
                         $appendDebugEvent([
                             'stage' => 'skip_test_email_disabled',
-                            'ts' => now()->toDateTimeString(),
+                            'ts' => $this->tenantNowDateTime($tenantId),
                             'email' => $testEmail,
                         ]);
                     } else {
@@ -1380,7 +1387,7 @@ class ActivationController extends Controller
                     }
                     $appendDebugEvent([
                         'stage' => 'send_test_email',
-                        'ts' => now()->toDateTimeString(),
+                        'ts' => $this->tenantNowDateTime($tenantId),
                         'email' => $testEmail,
                         'sent' => (bool) ($mailResult['sent'] ?? false),
                         'attempts' => (int) ($mailResult['attempts'] ?? 0),
@@ -1412,7 +1419,7 @@ class ActivationController extends Controller
                         'no_en-rol_id-fk' => null,
                         'no_en-ca_co_id-fk' => null,
                         'no_en-mensaje' => $notificationMessage !== '' ? $notificationMessage : $subject.' -> '.$testEmail,
-                        'no_en-ts' => now()->toDateTimeString(),
+                        'no_en-ts' => $this->tenantNowDateTime($tenantId),
                         'no_en-estado' => $mode === 'file' ? 'SIMULADO' : 'ENVIADO',
                         'no_en-num_de_intento' => '0',
                     ];
@@ -1727,7 +1734,7 @@ class ActivationController extends Controller
             .'<div><strong>Riesgo identificado:</strong> '.$escapeHtml($riesgoLabel).'</div>'
             .'<div><strong>Criterio:</strong> Normalidad</div>'
             .'<div><strong>Nivel de alerta:</strong> '.$escapeHtml($nivelLabel).'</div>'
-            .'<div><strong>Fecha/hora:</strong> '.$escapeHtml(now()->toDateTimeString()).'</div>'
+            .'<div><strong>Fecha/hora:</strong> '.$escapeHtml($this->tenantNowDateTime($tenantId)).'</div>'
             .'</div>'
             .'<div style="font-size: 12px; color: #666;">'.$escapeHtml($modeLabel).'</div>'
             .'</div>';
@@ -2043,7 +2050,7 @@ class ActivationController extends Controller
             .($riesgoLabel ? '<div><strong>Riesgo identificado:</strong> '.$escapeHtml($riesgoLabel).'</div>' : '')
             .($nivelLabel ? '<div><strong>Nivel de alerta:</strong> '.$escapeHtml($nivelLabel).'</div>' : '')
             .($motivoDetalle !== '' ? '<div><strong>Motivo de activación:</strong> '.$escapeHtml($motivoDetalle).'</div>' : '')
-            .'<div><strong>Fecha/hora:</strong> '.$escapeHtml(now()->toDateTimeString()).'</div>'
+            .'<div><strong>Fecha/hora:</strong> '.$escapeHtml($this->tenantNowDateTime($tenantId)).'</div>'
             .'</div>'
             .'<div>En este nivel no se generan acciones operativas.</div>'
             .'<div style="font-size: 12px; color: #666; margin-top: 10px;">'.$escapeHtml($modeLabel).'</div>'
@@ -2643,7 +2650,7 @@ class ActivationController extends Controller
             'activation_id' => $activationId,
             'tenant_id' => $tenantId,
             'mode' => $mode,
-            'generated_at' => now()->toDateTimeString(),
+            'generated_at' => $this->tenantNowDateTime($tenantId),
             'recipients' => [],
         ];
 
@@ -2660,7 +2667,7 @@ class ActivationController extends Controller
                 $lines[] = 'MODO: PRUEBA';
             }
             $lines[] = 'AVISO: Fin de '.$label;
-            $lines[] = 'FECHA/HORA: '.now()->toDateTimeString();
+            $lines[] = 'FECHA/HORA: '.$this->tenantNowDateTime($tenantId);
             $lines[] = 'PERSONA: '.(string) ($p['nombre'] ?? $p['per_id']);
             $lines[] = 'EMAIL: '.($to !== '' ? $to : '—');
             if ($detalle !== '') {
@@ -2680,7 +2687,7 @@ class ActivationController extends Controller
                     'activation_id' => $activationId,
                     'tenant_id' => $tenantId,
                     'mode' => $mode,
-                    'generated_at' => now()->toDateTimeString(),
+                    'generated_at' => $this->tenantNowDateTime($tenantId),
                     'subject' => $subject,
                     'detalle' => $detalle !== '' ? $detalle : null,
                     'persona' => [
@@ -2724,7 +2731,7 @@ class ActivationController extends Controller
                     'no_en-rol_id-fk' => null,
                     'no_en-ca_co_id-fk' => null,
                     'no_en-mensaje' => $subject,
-                    'no_en-ts' => now()->toDateTimeString(),
+                    'no_en-ts' => $this->tenantNowDateTime($tenantId),
                     'no_en-estado' => $mode === 'file' ? 'SIMULADO' : ($emailSent ? 'ENVIADO' : 'SIMULADO'),
                     'no_en-num_de_intento' => '0',
                 ];
@@ -3251,7 +3258,7 @@ class ActivationController extends Controller
                 $syntheticInsert['no_en-mensaje'] = 'Registro técnico para vincular confirmación de disponibilidad';
             }
             if (Schema::hasColumn('notificacion_envio_trs', 'no_en-ts')) {
-                $syntheticInsert['no_en-ts'] = now()->toDateTimeString();
+                $syntheticInsert['no_en-ts'] = $this->tenantNowDateTime($tenantId);
             }
             if (Schema::hasColumn('notificacion_envio_trs', 'no_en-estado')) {
                 $syntheticInsert['no_en-estado'] = 'ENVIADO';
@@ -3283,7 +3290,7 @@ class ActivationController extends Controller
                 $payload['no_co-confirmado'] = 'SI';
             }
             if (Schema::hasColumn('notificacion_confirmacion_trs', 'no_co-ts')) {
-                $payload['no_co-ts'] = now()->toDateTimeString();
+                $payload['no_co-ts'] = $this->tenantNowDateTime($tenantId);
             }
             if (Schema::hasColumn('notificacion_confirmacion_trs', 'no_co-respuesta')) {
                 $payload['no_co-respuesta'] = $validated['respuesta'] ?? null;
@@ -4928,8 +4935,8 @@ class ActivationController extends Controller
                     ->where('tenant_id', $tenantId)
                     ->where('activation_id', $activationId)
                     ->where('user_id', $user->id)
-                    ->where(function ($q) {
-                        $q->whereNull('expires_at')->orWhere('expires_at', '>=', now()->toDateTimeString());
+                    ->where(function ($q) use ($tenantId) {
+                        $q->whereNull('expires_at')->orWhere('expires_at', '>=', $this->tenantNowDateTime($tenantId));
                     })
                     ->exists();
             }
@@ -5289,8 +5296,8 @@ class ActivationController extends Controller
             [
                 'created_by_user_id' => $user?->id,
                 'expires_at' => $expiresAt,
-                'updated_at' => now()->toDateTimeString(),
-                'created_at' => now()->toDateTimeString(),
+                'updated_at' => $this->tenantNowDateTime($tenantId),
+                'created_at' => $this->tenantNowDateTime($tenantId),
             ],
         );
 
@@ -5376,7 +5383,7 @@ class ActivationController extends Controller
 
             if ($row) {
                 $expiresAt = $row->expires_at;
-                $allowed = $row->expires_at === null || $row->expires_at >= now()->toDateTimeString();
+                $allowed = $row->expires_at === null || $row->expires_at >= $this->tenantNowDateTime($tenantId);
             }
         }
 
@@ -5880,17 +5887,35 @@ class ActivationController extends Controller
         return $actionSetIds;
     }
 
+    private function tenantNowDateTime(string $tenantId): string
+    {
+        return $this->tenantNow($tenantId)->toDateTimeString();
+    }
+
+    private function tenantNowDate(string $tenantId): string
+    {
+        return $this->tenantNow($tenantId)->toDateString();
+    }
+
+    private function tenantNowTime(string $tenantId): string
+    {
+        return $this->tenantNow($tenantId)->toTimeString();
+    }
+
     private function tenantNow(string $tenantId): Carbon
     {
-        $timezone = 'Europe/Madrid';
-        if (Schema::hasTable('tenants')) {
-            $tenant = DB::table('tenants')->where('tenant_id', $tenantId)->first();
-            $candidate = trim((string) ($tenant?->timezone ?? ''));
-            if ($candidate !== '' && in_array($candidate, timezone_identifiers_list(), true)) {
-                $timezone = $candidate;
+        if (! isset($this->tenantTimezoneCache[$tenantId])) {
+            $timezone = 'Europe/Madrid';
+            if (Schema::hasTable('tenants')) {
+                $tenant = DB::table('tenants')->where('tenant_id', $tenantId)->first();
+                $candidate = trim((string) ($tenant?->timezone ?? ''));
+                if ($candidate !== '' && in_array($candidate, timezone_identifiers_list(), true)) {
+                    $timezone = $candidate;
+                }
             }
+            $this->tenantTimezoneCache[$tenantId] = $timezone;
         }
 
-        return Carbon::now($timezone);
+        return Carbon::now($this->tenantTimezoneCache[$tenantId]);
     }
 }

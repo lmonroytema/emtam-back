@@ -3,6 +3,7 @@
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schedule;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
@@ -13,16 +14,20 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function () {
-    if (! Schema::hasTable('tenants')
-        || ! Schema::hasTable('activacion_del_plan_trs')
-        || ! Schema::hasTable('ejecucion_accion_trs')
-        || ! Schema::hasTable('asignacion_en_funciones_trs')
-        || ! Schema::hasTable('accion_set_detalle_cfg')
-        || ! Schema::hasTable('persona_rol_grupo_cfg')
-        || ! Schema::hasTable('notificacion_envio_trs')
-        || ! Schema::hasTable('notificacion_confirmacion_trs')
+    Log::info('Iniciando comando activaciones:auto-delegar');
+    if (
+        !Schema::hasTable('tenants')
+        || !Schema::hasTable('activacion_del_plan_trs')
+        || !Schema::hasTable('ejecucion_accion_trs')
+        || !Schema::hasTable('asignacion_en_funciones_trs')
+        || !Schema::hasTable('accion_set_detalle_cfg')
+        || !Schema::hasTable('persona_rol_grupo_cfg')
+        || !Schema::hasTable('notificacion_envio_trs')
+        || !Schema::hasTable('notificacion_confirmacion_trs')
     ) {
-        $this->warn('Tablas requeridas no disponibles para autodelegación.');
+        $msg = 'Tablas requeridas no disponibles para autodelegación.';
+        $this->warn($msg);
+        Log::warning($msg);
 
         return 0;
     }
@@ -62,15 +67,15 @@ Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function (
         $activations = DB::table('activacion_del_plan_trs')
             ->when(
                 Schema::hasColumn('activacion_del_plan_trs', 'ac_de_pl-tenant_id'),
-                static fn ($q) => $q->where('ac_de_pl-tenant_id', $tenantId),
+                static fn($q) => $q->where('ac_de_pl-tenant_id', $tenantId),
             )
             ->when(
                 Schema::hasColumn('activacion_del_plan_trs', 'ac_de_pl-activo'),
-                static fn ($q) => $q->whereRaw("UPPER(COALESCE(`ac_de_pl-activo`, 'SI')) <> 'NO'"),
+                static fn($q) => $q->whereRaw("UPPER(COALESCE(`ac_de_pl-activo`, 'SI')) <> 'NO'"),
             )
             ->when(
                 Schema::hasColumn('activacion_del_plan_trs', 'ac_de_pl-estado'),
-                static fn ($q) => $q->whereRaw("UPPER(COALESCE(`ac_de_pl-estado`, '')) NOT IN ('FINALIZADA','FINALIZADO')"),
+                static fn($q) => $q->whereRaw("UPPER(COALESCE(`ac_de_pl-estado`, '')) NOT IN ('FINALIZADA','FINALIZADO')"),
             )
             ->get([
                 'ac_de_pl-id',
@@ -86,21 +91,42 @@ Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function (
                 continue;
             }
 
-            $activationAt = \Carbon\Carbon::parse($date.' '.$time, $timezone);
+            $activationAt = \Carbon\Carbon::parse($date . ' ' . $time, $timezone);
             $deadline = $activationAt->copy()->addMinutes($limitMinutes);
+
+            // Diagnóstico detallado
+            $transcurridosConSigno = (int) $activationAt->diffInMinutes($now, false);
+
             if ($deadline->greaterThan($now)) {
+                Log::debug("Saltando Plan $activationId:", [
+                    'tenant_tz' => $timezone,
+                    'now_tenant' => $now->toDateTimeString(),
+                    'activation_tenant' => $activationAt->toDateTimeString(),
+                    'plan_limit_min' => $limitMinutes,
+                    'elapsed_min' => $transcurridosConSigno,
+                    'status' => 'No ha expirado'
+                ]);
                 continue;
             }
+
+            Log::info("Procesando Plan $activationId:", [
+                'tenant_tz' => $timezone,
+                'now_tenant' => $now->toDateTimeString(),
+                'activation_tenant' => $activationAt->toDateTimeString(),
+                'plan_limit_min' => $limitMinutes,
+                'elapsed_min' => $transcurridosConSigno,
+                'status' => 'Expirado (Delegando)'
+            ]);
             $processedActivations++;
 
             $details = DB::table('accion_set_detalle_cfg')
                 ->when(
                     Schema::hasColumn('accion_set_detalle_cfg', 'ac_se_de-tenant_id'),
-                    static fn ($q) => $q->where('ac_se_de-tenant_id', $tenantId),
+                    static fn($q) => $q->where('ac_se_de-tenant_id', $tenantId),
                 )
                 ->when(
                     Schema::hasColumn('accion_set_detalle_cfg', 'ac_se_de-activo'),
-                    static fn ($q) => $q->whereRaw("UPPER(COALESCE(`ac_se_de-activo`, 'SI')) <> 'NO'"),
+                    static fn($q) => $q->whereRaw("UPPER(COALESCE(`ac_se_de-activo`, 'SI')) <> 'NO'"),
                 )
                 ->get(['ac_se_de-id', 'ac_se_de-rol_id-fk']);
             $roleByDetailId = [];
@@ -115,7 +141,7 @@ Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function (
             $sentRows = DB::table('notificacion_envio_trs')
                 ->when(
                     Schema::hasColumn('notificacion_envio_trs', 'no_en-tenant_id'),
-                    static fn ($q) => $q->where('no_en-tenant_id', $tenantId),
+                    static fn($q) => $q->where('no_en-tenant_id', $tenantId),
                 )
                 ->where('no_en-ac_de_pl_id-fk', $activationId)
                 ->whereNotNull('no_en-per_id-fk')
@@ -129,9 +155,6 @@ Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function (
                 if ($perId === '' || $sentTs === '') {
                     continue;
                 }
-                if (\Carbon\Carbon::parse($sentTs, $timezone)->greaterThan($deadline)) {
-                    continue;
-                }
                 $noEnId = trim((string) ($s->{'no_en-id'} ?? ''));
                 if ($noEnId !== '') {
                     $notifIdsByPerson[$perId][] = $noEnId;
@@ -139,12 +162,12 @@ Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function (
             }
 
             $confirmedByPerson = [];
-            if (! empty($notifIdsByPerson)) {
+            if (!empty($notifIdsByPerson)) {
                 $allNotifIds = array_values(array_unique(array_merge(...array_values($notifIdsByPerson))));
                 $confirmRows = DB::table('notificacion_confirmacion_trs')
                     ->when(
                         Schema::hasColumn('notificacion_confirmacion_trs', 'no_co-tenant_id'),
-                        static fn ($q) => $q->where('no_co-tenant_id', $tenantId),
+                        static fn($q) => $q->where('no_co-tenant_id', $tenantId),
                     )
                     ->whereIn('no_co-no_en_id-fk', $allNotifIds)
                     ->whereRaw("UPPER(COALESCE(`no_co-confirmado`, 'NO')) IN ('SI','S','1','TRUE')")
@@ -152,14 +175,9 @@ Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function (
                 $confirmedNotifIds = [];
                 foreach ($confirmRows as $c) {
                     $noEnId = trim((string) ($c->{'no_co-no_en_id-fk'} ?? ''));
-                    $ts = trim((string) ($c->{'no_co-ts'} ?? ''));
-                    if ($noEnId === '' || $ts === '') {
-                        continue;
+                    if ($noEnId !== '') {
+                        $confirmedNotifIds[$noEnId] = true;
                     }
-                    if (\Carbon\Carbon::parse($ts, $timezone)->greaterThan($deadline)) {
-                        continue;
-                    }
-                    $confirmedNotifIds[$noEnId] = true;
                 }
                 foreach ($notifIdsByPerson as $perId => $ids) {
                     foreach ($ids as $id) {
@@ -174,11 +192,11 @@ Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function (
             $prgRows = DB::table('persona_rol_grupo_cfg')
                 ->when(
                     Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-tenant_id'),
-                    static fn ($q) => $q->where('pe_ro_gr-tenant_id', $tenantId),
+                    static fn($q) => $q->where('pe_ro_gr-tenant_id', $tenantId),
                 )
                 ->when(
                     Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-activo'),
-                    static fn ($q) => $q->whereRaw("UPPER(COALESCE(`pe_ro_gr-activo`, 'SI')) <> 'NO'"),
+                    static fn($q) => $q->whereRaw("UPPER(COALESCE(`pe_ro_gr-activo`, 'SI')) <> 'NO'"),
                 )
                 ->when(
                     Schema::hasColumn('persona_rol_grupo_cfg', 'pe_ro_gr-fech_fin'),
@@ -216,7 +234,7 @@ Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function (
                     'ini' => trim((string) ($r->{'pe_ro_gr-fech_ini'} ?? '')),
                     'id' => trim((string) ($r->{'pe_ro_gr-id'} ?? '')),
                 ];
-                $key = $rolId.'|'.$gid;
+                $key = $rolId . '|' . $gid;
                 if ($tipo === 'TITULAR') {
                     $titularesByRoleGroup[$key][] = $entry;
                 } elseif ($tipo === 'SUPLENTE') {
@@ -250,7 +268,7 @@ Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function (
             $execRows = DB::table('ejecucion_accion_trs')
                 ->when(
                     Schema::hasColumn('ejecucion_accion_trs', 'ej_ac-tenant_id'),
-                    static fn ($q) => $q->where('ej_ac-tenant_id', $tenantId),
+                    static fn($q) => $q->where('ej_ac-tenant_id', $tenantId),
                 )
                 ->where('ej_ac-ac_de_pl_id-fk', $activationId)
                 ->orderByDesc('ej_ac-ts_ini')
@@ -269,8 +287,8 @@ Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function (
                 if ($gid === '' || $detailId === '') {
                     continue;
                 }
-                $key = $gid.'|'.$detailId;
-                if (! isset($latestExecByKey[$key])) {
+                $key = $gid . '|' . $detailId;
+                if (!isset($latestExecByKey[$key])) {
                     $latestExecByKey[$key] = $ej;
                 }
             }
@@ -282,17 +300,17 @@ Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function (
                     $detailIdsInPlan[$detailId] = true;
                 }
             }
-            if (! empty($detailIdsInPlan)) {
+            if (!empty($detailIdsInPlan)) {
                 $roleByDetailId = [];
                 $detailRows = DB::table('accion_set_detalle_cfg')
                     ->when(
                         Schema::hasColumn('accion_set_detalle_cfg', 'ac_se_de-tenant_id'),
-                        static fn ($q) => $q->where('ac_se_de-tenant_id', $tenantId),
+                        static fn($q) => $q->where('ac_se_de-tenant_id', $tenantId),
                     )
                     ->whereIn('ac_se_de-id', array_keys($detailIdsInPlan))
                     ->when(
                         Schema::hasColumn('accion_set_detalle_cfg', 'ac_se_de-activo'),
-                        static fn ($q) => $q->whereRaw("UPPER(COALESCE(`ac_se_de-activo`, 'SI')) <> 'NO'"),
+                        static fn($q) => $q->whereRaw("UPPER(COALESCE(`ac_se_de-activo`, 'SI')) <> 'NO'"),
                     )
                     ->get(['ac_se_de-id', 'ac_se_de-rol_id-fk']);
                 foreach ($detailRows as $d) {
@@ -307,12 +325,12 @@ Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function (
             $assignmentRows = DB::table('asignacion_en_funciones_trs')
                 ->when(
                     Schema::hasColumn('asignacion_en_funciones_trs', 'as_en_fu-tenant_id'),
-                    static fn ($q) => $q->where('as_en_fu-tenant_id', $tenantId),
+                    static fn($q) => $q->where('as_en_fu-tenant_id', $tenantId),
                 )
                 ->where('as_en_fu-ac_de_pl_id-fk', $activationId)
                 ->when(
                     Schema::hasColumn('asignacion_en_funciones_trs', 'as_en_fu-estado'),
-                    static fn ($q) => $q->whereRaw("UPPER(COALESCE(`as_en_fu-estado`, 'ACTIVA')) NOT IN ('CERRADA','CERRADO')"),
+                    static fn($q) => $q->whereRaw("UPPER(COALESCE(`as_en_fu-estado`, 'ACTIVA')) NOT IN ('CERRADA','CERRADO')"),
                 )
                 ->when(
                     Schema::hasColumn('asignacion_en_funciones_trs', 'as_en_fu-ts_fin'),
@@ -339,7 +357,7 @@ Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function (
                     continue;
                 }
                 $assignmentById[$id] = $a;
-                $assignmentByKey[$gid.'|'.$perId.'|'.$tipo] = $id;
+                $assignmentByKey[$gid . '|' . $perId . '|' . $tipo] = $id;
             }
 
             foreach ($latestExecByKey as $key => $ej) {
@@ -354,7 +372,7 @@ Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function (
                     continue;
                 }
 
-                $rgKey = $roleId.'|'.$gid;
+                $rgKey = $roleId . '|' . $gid;
                 $titularRows = $titularesByRoleGroup[$rgKey] ?? [];
                 $titularId = trim((string) ($titularRows[0]['per_id'] ?? ''));
                 if ($titularId === '') {
@@ -365,15 +383,22 @@ Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function (
                 }
 
                 $candidateRows = $suplentesByRoleGroup[$rgKey] ?? [];
+                Log::debug("  - Analizando candidatos para Rol $roleId: " . count($candidateRows) . " suplentes encontrados.");
+
                 $suplenteId = '';
                 foreach ($candidateRows as $c) {
                     $pid = trim((string) ($c['per_id'] ?? ''));
-                    if ($pid !== '' && (($confirmedByPerson[$pid] ?? false) === true)) {
+                    $estaConfirmado = ($confirmedByPerson[$pid] ?? false) === true ? 'SI' : 'NO';
+                    Log::debug("    * Candidato $pid: Confirmado = $estaConfirmado");
+
+                    if ($pid !== '' && $estaConfirmado === 'SI') {
                         $suplenteId = $pid;
                         break;
                     }
                 }
+
                 if ($suplenteId === '') {
+                    Log::warning("  - [RESULTADO] No se encontró ningún suplente CONFIRMADO para Rol $roleId en Plan $activationId.");
                     continue;
                 }
 
@@ -384,11 +409,11 @@ Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function (
                     continue;
                 }
 
-                $targetAsigKey = $gid.'|'.$suplenteId.'|SUPLENTE';
+                $targetAsigKey = $gid . '|' . $suplenteId . '|SUPLENTE';
                 $targetAsigId = $assignmentByKey[$targetAsigKey] ?? '';
                 if ($targetAsigId === '') {
-                    $targetAsigId = 'ASEF-'.Str::uuid()->toString();
-                    if (! $dryRun) {
+                    $targetAsigId = 'ASEF-' . Str::uuid()->toString();
+                    if (!$dryRun) {
                         DB::table('asignacion_en_funciones_trs')->insert([
                             'as_en_fu-id' => $targetAsigId,
                             'as_en_fu-tenant_id' => $tenantId,
@@ -406,7 +431,7 @@ Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function (
                     $assignmentByKey[$targetAsigKey] = $targetAsigId;
                 }
 
-                if (! $dryRun) {
+                if (!$dryRun) {
                     DB::table('ejecucion_accion_trs')
                         ->where('ej_ac-id', $ej->{'ej_ac-id'})
                         ->update([
@@ -443,8 +468,10 @@ Artisan::command('activaciones:auto-delegar {--tenant=} {--dry-run}', function (
         }
     }
 
-    $this->info('Activaciones evaluadas: '.$processedActivations);
-    $this->info('Acciones autodelegadas: '.$delegatedActions.($dryRun ? ' (dry-run)' : ''));
+    $this->info('Activaciones evaluadas: ' . $processedActivations);
+    $this->info('Acciones autodelegadas: ' . $delegatedActions . ($dryRun ? ' (dry-run)' : ''));
+
+    Log::info("Finalizado comando auto-delegar. Evaluadas: $processedActivations, Delegadas: $delegatedActions");
 
     return 0;
 })->purpose('Autodelega acciones vencidas al primer suplente confirmado sin depender de una pantalla');
@@ -483,18 +510,18 @@ Artisan::command('activaciones:reset {--force}', function () {
 
     $this->info('Tablas a reiniciar:');
     foreach ($existing as $row) {
-        $this->line('- '.$row['name'].' (filas: '.$row['count'].')');
+        $this->line('- ' . $row['name'] . ' (filas: ' . $row['count'] . ')');
     }
 
-    if (! empty($missing)) {
+    if (!empty($missing)) {
         $this->warn('Tablas no encontradas:');
         foreach ($missing as $table) {
-            $this->line('- '.$table);
+            $this->line('- ' . $table);
         }
     }
 
-    if (! $this->option('force')) {
-        if (! $this->confirm('¿Deseas continuar y eliminar estos registros?')) {
+    if (!$this->option('force')) {
+        if (!$this->confirm('¿Deseas continuar y eliminar estos registros?')) {
             $this->line('Cancelado.');
 
             return 0;
@@ -517,7 +544,7 @@ Artisan::command('csv:validate {--dir=} {--limit=0} {--json} {--all} {--mode=} {
     $asJson = (bool) $this->option('json');
     $mode = strtolower(trim((string) $this->option('mode')));
     $showAll = $this->option('all') || $mode === 'all' || $mode === 'todas';
-    $onlyDiff = ! $showAll;
+    $onlyDiff = !$showAll;
     $dirsOption = trim((string) $this->option('dir'));
     $strict = (bool) $this->option('strict');
 
@@ -526,7 +553,7 @@ Artisan::command('csv:validate {--dir=} {--limit=0} {--json} {--all} {--mode=} {
     };
 
     $addCsvFile = static function (string $path, array &$files): void {
-        if (! is_file($path)) {
+        if (!is_file($path)) {
             return;
         }
         if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) !== 'csv') {
@@ -548,7 +575,7 @@ Artisan::command('csv:validate {--dir=} {--limit=0} {--json} {--all} {--mode=} {
         $spreadsheet = IOFactory::load($path);
         $sheet = $spreadsheet->getSheet(0);
         $highestCol = $sheet->getHighestColumn();
-        $headerRow = $sheet->rangeToArray('A1:'.$highestCol.'1', null, true, false)[0] ?? [];
+        $headerRow = $sheet->rangeToArray('A1:' . $highestCol . '1', null, true, false)[0] ?? [];
 
         return [$headerRow, $sheet, $highestCol];
     };
@@ -563,7 +590,7 @@ Artisan::command('csv:validate {--dir=} {--limit=0} {--json} {--all} {--mode=} {
                 $candidatePaths[] = $raw;
             } else {
                 $candidatePaths[] = base_path($raw);
-                $candidatePaths[] = base_path('..'.DIRECTORY_SEPARATOR.$raw);
+                $candidatePaths[] = base_path('..' . DIRECTORY_SEPARATOR . $raw);
             }
             foreach ($candidatePaths as $path) {
                 if (is_dir($path)) {
@@ -574,12 +601,12 @@ Artisan::command('csv:validate {--dir=} {--limit=0} {--json} {--all} {--mode=} {
             }
         }
     } else {
-        foreach ([base_path('CSV'), base_path('..'.DIRECTORY_SEPARATOR.'CSV')] as $dir) {
+        foreach ([base_path('CSV'), base_path('..' . DIRECTORY_SEPARATOR . 'CSV')] as $dir) {
             if (is_dir($dir)) {
                 $directories[] = $dir;
             }
         }
-        foreach ([base_path('Indice.csv'), base_path('..'.DIRECTORY_SEPARATOR.'Indice.csv')] as $file) {
+        foreach ([base_path('Indice.csv'), base_path('..' . DIRECTORY_SEPARATOR . 'Indice.csv')] as $file) {
             if (is_file($file)) {
                 $addCsvFile($file, $csvFiles);
             }
@@ -592,10 +619,10 @@ Artisan::command('csv:validate {--dir=} {--limit=0} {--json} {--all} {--mode=} {
         );
         foreach ($iterator as $file) {
             $path = $file->getPathname();
-            if (str_contains($path, DIRECTORY_SEPARATOR.'vendor'.DIRECTORY_SEPARATOR)) {
+            if (str_contains($path, DIRECTORY_SEPARATOR . 'vendor' . DIRECTORY_SEPARATOR)) {
                 continue;
             }
-            if (str_contains($path, DIRECTORY_SEPARATOR.'node_modules'.DIRECTORY_SEPARATOR)) {
+            if (str_contains($path, DIRECTORY_SEPARATOR . 'node_modules' . DIRECTORY_SEPARATOR)) {
                 continue;
             }
             $addCsvFile($path, $csvFiles);
@@ -623,12 +650,12 @@ Artisan::command('csv:validate {--dir=} {--limit=0} {--json} {--all} {--mode=} {
             ->all();
     } elseif ($driver === 'sqlite') {
         $tables = array_map(
-            static fn ($r) => $r->name,
+            static fn($r) => $r->name,
             DB::select("SELECT name FROM sqlite_master WHERE type='table'")
         );
     } elseif ($driver === 'pgsql') {
         $tables = array_map(
-            static fn ($r) => $r->tablename,
+            static fn($r) => $r->tablename,
             DB::select("SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname='public'")
         );
     }
@@ -665,7 +692,7 @@ Artisan::command('csv:validate {--dir=} {--limit=0} {--json} {--all} {--mode=} {
         $base = preg_replace('/^\\d+_+/', '', $base) ?? $base;
         $base = preg_replace('/_+/', '_', $base) ?? $base;
         $base = trim($base, '_');
-        $tokens = array_filter(explode('_', $base), static fn ($t) => $t !== '');
+        $tokens = array_filter(explode('_', $base), static fn($t) => $t !== '');
         $filtered = [];
         foreach ($tokens as $t) {
             if (in_array($t, ['apptabs', 'app', 'tabs', 'dataset', 'data', 'notebooklm', 'emta', 'main', 'df', 'general', 'resum'], true)) {
@@ -703,7 +730,7 @@ Artisan::command('csv:validate {--dir=} {--limit=0} {--json} {--all} {--mode=} {
             return ['table' => $base, 'ambiguous' => []];
         }
         foreach ($suffixes as $suffix) {
-            $candidate = $base.$suffix;
+            $candidate = $base . $suffix;
             if (isset($tablesLookup[$candidate])) {
                 return ['table' => $candidate, 'ambiguous' => []];
             }
@@ -771,7 +798,7 @@ Artisan::command('csv:validate {--dir=} {--limit=0} {--json} {--all} {--mode=} {
         $emptyHeaders = 0;
 
         foreach ($headers as $h) {
-            if (! is_string($h)) {
+            if (!is_string($h)) {
                 $emptyHeaders++;
 
                 continue;
@@ -795,7 +822,7 @@ Artisan::command('csv:validate {--dir=} {--limit=0} {--json} {--all} {--mode=} {
             if ($fh !== false) {
                 $skippedHeader = false;
                 while (($line = fgets($fh)) !== false && $rowCount < $limit) {
-                    if (! $skippedHeader && trim($line) !== '') {
+                    if (!$skippedHeader && trim($line) !== '') {
                         $skippedHeader = true;
                         continue;
                     }
@@ -819,21 +846,21 @@ Artisan::command('csv:validate {--dir=} {--limit=0} {--json} {--all} {--mode=} {
         if ($table && Schema::hasTable($table)) {
             $dbCols = Schema::getColumnListing($table);
             $dbNormalized = array_values(array_filter(array_map($normalizeCol, $dbCols), static function (string $col) use ($isIgnoredColumn): bool {
-                return ! $isIgnoredColumn($col);
+                return !$isIgnoredColumn($col);
             }));
             $dbSet = array_fill_keys($dbNormalized, true);
             $csvSet = array_filter($csvNormalized, static function (bool $value, string $key) use ($isIgnoredColumn): bool {
-                return ! $isIgnoredColumn($key);
+                return !$isIgnoredColumn($key);
             }, ARRAY_FILTER_USE_BOTH);
             $missingInDb = array_values(array_diff(array_keys($csvSet), array_keys($dbSet)));
             $missingInCsv = array_values(array_diff(array_keys($dbSet), array_keys($csvSet)));
         } elseif ($table) {
             $missingInDb = array_values(array_filter(array_keys($csvNormalized), static function (string $col) use ($isIgnoredColumn): bool {
-                return ! $isIgnoredColumn($col);
+                return !$isIgnoredColumn($col);
             }));
         } else {
             $missingInDb = array_values(array_filter(array_keys($csvNormalized), static function (string $col) use ($isIgnoredColumn): bool {
-                return ! $isIgnoredColumn($col);
+                return !$isIgnoredColumn($col);
             }));
         }
 
@@ -842,7 +869,7 @@ Artisan::command('csv:validate {--dir=} {--limit=0} {--json} {--all} {--mode=} {
             'table' => $table,
             'ambiguous' => $ambiguous,
             'delimiter' => $delimiter,
-            'csv_columns' => array_values(array_map(static fn ($c) => $c, $csvOriginal)),
+            'csv_columns' => array_values(array_map(static fn($c) => $c, $csvOriginal)),
             'db_columns' => $dbCols,
             'missing_in_db' => $missingInDb,
             'missing_in_csv' => $missingInCsv,
@@ -856,7 +883,7 @@ Artisan::command('csv:validate {--dir=} {--limit=0} {--json} {--all} {--mode=} {
         } else {
             $unresolvedCsv[] = $base;
         }
-        if (! empty($ambiguous)) {
+        if (!empty($ambiguous)) {
             $ambiguousCsv[$base] = $ambiguous;
         }
     }
@@ -864,13 +891,13 @@ Artisan::command('csv:validate {--dir=} {--limit=0} {--json} {--all} {--mode=} {
     $resolvedCsvTablesList = array_keys($resolvedCsvTables);
     sort($resolvedCsvTablesList);
     $dbTablesForCompare = array_values(array_filter($tables, static function (string $table) use ($systemTables): bool {
-        return ! isset($systemTables[$table]);
+        return !isset($systemTables[$table]);
     }));
     sort($dbTablesForCompare);
     $tablesWithoutCsv = array_values(array_diff($dbTablesForCompare, $resolvedCsvTablesList));
     $newCsvTables = array_values(array_unique($unresolvedCsv));
     sort($newCsvTables);
-    $transactionTables = array_values(array_filter($tables, static fn (string $t): bool => str_ends_with($t, '_trs')));
+    $transactionTables = array_values(array_filter($tables, static fn(string $t): bool => str_ends_with($t, '_trs')));
     sort($transactionTables);
 
     $foreignKeys = [];
@@ -884,7 +911,7 @@ Artisan::command('csv:validate {--dir=} {--limit=0} {--json} {--all} {--mode=} {
         foreach ($dbTablesForCompare as $table) {
             $rows = DB::select("PRAGMA foreign_key_list('{$table}')");
             foreach ($rows as $r) {
-                if (! empty($r->table)) {
+                if (!empty($r->table)) {
                     $foreignKeys[] = (object) ['TABLE_NAME' => $table, 'REFERENCED_TABLE_NAME' => $r->table];
                 }
             }
@@ -914,18 +941,18 @@ Artisan::command('csv:validate {--dir=} {--limit=0} {--json} {--all} {--mode=} {
         if ($child === '' || $parent === '') {
             continue;
         }
-        if (! isset($dependencyGraph[$child]) || ! isset($dependencyGraph[$parent])) {
+        if (!isset($dependencyGraph[$child]) || !isset($dependencyGraph[$parent])) {
             continue;
         }
-        if (! in_array($parent, $dependencyGraph[$child], true)) {
+        if (!in_array($parent, $dependencyGraph[$child], true)) {
             $dependencyGraph[$child][] = $parent;
         }
     }
 
     $importPlan = [];
     $graphCopy = $dependencyGraph;
-    while (! empty($graphCopy)) {
-        $ready = array_keys(array_filter($graphCopy, static fn (array $deps): bool => empty($deps)));
+    while (!empty($graphCopy)) {
+        $ready = array_keys(array_filter($graphCopy, static fn(array $deps): bool => empty($deps)));
         sort($ready);
         if (empty($ready)) {
             break;
@@ -942,7 +969,7 @@ Artisan::command('csv:validate {--dir=} {--limit=0} {--json} {--all} {--mode=} {
     sort($cycleTables);
 
     $truncatePlan = array_values(array_unique(array_merge($transactionTables, $importPlan)));
-    $truncatePlan = array_values(array_filter($truncatePlan, static fn (string $t): bool => $t !== ''));
+    $truncatePlan = array_values(array_filter($truncatePlan, static fn(string $t): bool => $t !== ''));
     $truncatePlan = array_reverse($truncatePlan);
     $filteredReport = $report;
     if ($onlyDiff) {
@@ -954,10 +981,10 @@ Artisan::command('csv:validate {--dir=} {--limit=0} {--json} {--all} {--mode=} {
                 return true;
             }
 
-            return ! empty($entry['ambiguous'])
-                || ! empty($entry['missing_in_db'])
-                || ! empty($entry['missing_in_csv'])
-                || ! empty($entry['duplicate_headers'])
+            return !empty($entry['ambiguous'])
+                || !empty($entry['missing_in_db'])
+                || !empty($entry['missing_in_csv'])
+                || !empty($entry['duplicate_headers'])
                 || (($entry['empty_headers'] ?? 0) > 0);
         }));
     }
@@ -978,71 +1005,71 @@ Artisan::command('csv:validate {--dir=} {--limit=0} {--json} {--all} {--mode=} {
             'report' => $filteredReport,
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
 
-        return ($strict && (! empty($newCsvTables) || ! empty($tablesWithoutCsv) || count($filteredReport) > 0)) ? 2 : 0;
+        return ($strict && (!empty($newCsvTables) || !empty($tablesWithoutCsv) || count($filteredReport) > 0)) ? 2 : 0;
     }
 
-    $this->line($onlyDiff ? 'Archivos con diferencias: '.count($filteredReport) : 'Archivos verificados: '.count($filteredReport));
-    $this->line('Tablas CSV sin resolver: '.count($newCsvTables));
+    $this->line($onlyDiff ? 'Archivos con diferencias: ' . count($filteredReport) : 'Archivos verificados: ' . count($filteredReport));
+    $this->line('Tablas CSV sin resolver: ' . count($newCsvTables));
     foreach ($newCsvTables as $t) {
-        $this->warn('  - '.$t);
+        $this->warn('  - ' . $t);
     }
-    if (! empty($ambiguousCsv)) {
-        $this->line('Tablas CSV con coincidencias ambiguas: '.count($ambiguousCsv));
+    if (!empty($ambiguousCsv)) {
+        $this->line('Tablas CSV con coincidencias ambiguas: ' . count($ambiguousCsv));
         foreach ($ambiguousCsv as $base => $matches) {
-            $this->warn('  - '.$base.': '.implode(', ', $matches));
+            $this->warn('  - ' . $base . ': ' . implode(', ', $matches));
         }
     }
-    $this->line('Tablas en BD sin CSV: '.count($tablesWithoutCsv));
+    $this->line('Tablas en BD sin CSV: ' . count($tablesWithoutCsv));
     foreach ($tablesWithoutCsv as $t) {
-        $this->warn('  - '.$t);
+        $this->warn('  - ' . $t);
     }
-    $this->line('Tablas transaccionales (_trs) detectadas: '.count($transactionTables));
+    $this->line('Tablas transaccionales (_trs) detectadas: ' . count($transactionTables));
     foreach ($transactionTables as $t) {
-        $this->line('  - '.$t);
+        $this->line('  - ' . $t);
     }
-    $this->line('Plan de importación (por dependencias FK): '.count($importPlan));
+    $this->line('Plan de importación (por dependencias FK): ' . count($importPlan));
     foreach ($importPlan as $t) {
-        $this->line('  - '.$t);
+        $this->line('  - ' . $t);
     }
-    if (! empty($cycleTables)) {
-        $this->warn('Tablas con dependencias cíclicas: '.count($cycleTables));
+    if (!empty($cycleTables)) {
+        $this->warn('Tablas con dependencias cíclicas: ' . count($cycleTables));
         foreach ($cycleTables as $t) {
-            $this->warn('  - '.$t);
+            $this->warn('  - ' . $t);
         }
     }
-    $this->line('Plan de truncado sugerido: '.count($truncatePlan));
+    $this->line('Plan de truncado sugerido: ' . count($truncatePlan));
     foreach ($truncatePlan as $t) {
-        $this->line('  - '.$t);
+        $this->line('  - ' . $t);
     }
 
     foreach ($filteredReport as $entry) {
         $this->line('');
         $this->line($entry['file']);
         if (isset($entry['error'])) {
-            $this->error('  '.$entry['error']);
+            $this->error('  ' . $entry['error']);
 
             continue;
         }
         $table = $entry['table'] ?? null;
-        $this->line('  Tabla: '.($table ?: 'sin resolver'));
-        if (! empty($entry['ambiguous'])) {
-            $this->warn('  Coincidencias posibles: '.implode(', ', $entry['ambiguous']));
+        $this->line('  Tabla: ' . ($table ?: 'sin resolver'));
+        if (!empty($entry['ambiguous'])) {
+            $this->warn('  Coincidencias posibles: ' . implode(', ', $entry['ambiguous']));
         }
-        if (! empty($entry['missing_in_db'])) {
-            $this->warn('  Columnas en CSV no presentes en BD: '.implode(', ', $entry['missing_in_db']));
+        if (!empty($entry['missing_in_db'])) {
+            $this->warn('  Columnas en CSV no presentes en BD: ' . implode(', ', $entry['missing_in_db']));
         }
-        if (! empty($entry['missing_in_csv'])) {
-            $this->warn('  Columnas en BD no presentes en CSV: '.implode(', ', $entry['missing_in_csv']));
+        if (!empty($entry['missing_in_csv'])) {
+            $this->warn('  Columnas en BD no presentes en CSV: ' . implode(', ', $entry['missing_in_csv']));
         }
-        if (! empty($entry['duplicate_headers'])) {
-            $this->warn('  Encabezados duplicados: '.implode(', ', $entry['duplicate_headers']));
+        if (!empty($entry['duplicate_headers'])) {
+            $this->warn('  Encabezados duplicados: ' . implode(', ', $entry['duplicate_headers']));
         }
         if (($entry['empty_headers'] ?? 0) > 0) {
-            $this->warn('  Encabezados vacíos: '.$entry['empty_headers']);
+            $this->warn('  Encabezados vacíos: ' . $entry['empty_headers']);
         }
     }
 
-    if ($strict && (! empty($newCsvTables) || ! empty($tablesWithoutCsv) || count($filteredReport) > 0)) {
+    if ($strict && (!empty($newCsvTables) || !empty($tablesWithoutCsv) || count($filteredReport) > 0)) {
         return 2;
     }
 
@@ -1060,7 +1087,7 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
     };
 
     $addCsvFile = static function (string $path, array &$files): void {
-        if (! is_file($path)) {
+        if (!is_file($path)) {
             return;
         }
         if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) !== 'csv') {
@@ -1083,7 +1110,7 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
         $sheet = $spreadsheet->getSheet(0);
         $highestCol = $sheet->getHighestColumn();
         $highestRow = $sheet->getHighestRow();
-        $headerRow = $sheet->rangeToArray('A1:'.$highestCol.'1', null, true, false)[0] ?? [];
+        $headerRow = $sheet->rangeToArray('A1:' . $highestCol . '1', null, true, false)[0] ?? [];
 
         return [$sheet, $highestCol, $highestRow, $headerRow];
     };
@@ -1098,7 +1125,7 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
                 $candidatePaths[] = $raw;
             } else {
                 $candidatePaths[] = base_path($raw);
-                $candidatePaths[] = base_path('..'.DIRECTORY_SEPARATOR.$raw);
+                $candidatePaths[] = base_path('..' . DIRECTORY_SEPARATOR . $raw);
             }
             foreach ($candidatePaths as $path) {
                 if (is_dir($path)) {
@@ -1109,12 +1136,12 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
             }
         }
     } else {
-        foreach ([base_path('CSV'), base_path('..'.DIRECTORY_SEPARATOR.'CSV')] as $dir) {
+        foreach ([base_path('CSV'), base_path('..' . DIRECTORY_SEPARATOR . 'CSV')] as $dir) {
             if (is_dir($dir)) {
                 $directories[] = $dir;
             }
         }
-        foreach ([base_path('Indice.csv'), base_path('..'.DIRECTORY_SEPARATOR.'Indice.csv')] as $file) {
+        foreach ([base_path('Indice.csv'), base_path('..' . DIRECTORY_SEPARATOR . 'Indice.csv')] as $file) {
             if (is_file($file)) {
                 $addCsvFile($file, $csvFiles);
             }
@@ -1127,10 +1154,10 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
         );
         foreach ($iterator as $file) {
             $path = $file->getPathname();
-            if (str_contains($path, DIRECTORY_SEPARATOR.'vendor'.DIRECTORY_SEPARATOR)) {
+            if (str_contains($path, DIRECTORY_SEPARATOR . 'vendor' . DIRECTORY_SEPARATOR)) {
                 continue;
             }
-            if (str_contains($path, DIRECTORY_SEPARATOR.'node_modules'.DIRECTORY_SEPARATOR)) {
+            if (str_contains($path, DIRECTORY_SEPARATOR . 'node_modules' . DIRECTORY_SEPARATOR)) {
                 continue;
             }
             $addCsvFile($path, $csvFiles);
@@ -1158,12 +1185,12 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
             ->all();
     } elseif ($driver === 'sqlite') {
         $tables = array_map(
-            static fn ($r) => $r->name,
+            static fn($r) => $r->name,
             DB::select("SELECT name FROM sqlite_master WHERE type='table'")
         );
     } elseif ($driver === 'pgsql') {
         $tables = array_map(
-            static fn ($r) => $r->tablename,
+            static fn($r) => $r->tablename,
             DB::select("SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname='public'")
         );
     }
@@ -1186,7 +1213,7 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
         $base = preg_replace('/^\\d+_+/', '', $base) ?? $base;
         $base = preg_replace('/_+/', '_', $base) ?? $base;
         $base = trim($base, '_');
-        $tokens = array_filter(explode('_', $base), static fn ($t) => $t !== '');
+        $tokens = array_filter(explode('_', $base), static fn($t) => $t !== '');
         $filtered = [];
         foreach ($tokens as $t) {
             if (in_array($t, ['apptabs', 'app', 'tabs', 'dataset', 'data', 'notebooklm', 'emta', 'main', 'df', 'general', 'resum'], true)) {
@@ -1220,7 +1247,7 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
             return ['table' => $base, 'ambiguous' => []];
         }
         foreach ($suffixes as $suffix) {
-            $candidate = $base.$suffix;
+            $candidate = $base . $suffix;
             if (isset($tablesLookup[$candidate])) {
                 return ['table' => $candidate, 'ambiguous' => []];
             }
@@ -1292,7 +1319,7 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
         $emptyHeaders = 0;
 
         foreach ($headers as $h) {
-            if (! is_string($h)) {
+            if (!is_string($h)) {
                 $emptyHeaders++;
                 continue;
             }
@@ -1313,16 +1340,16 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
         $table = $resolved['table'];
         $ambiguous = $resolved['ambiguous'];
 
-        if (! $table) {
+        if (!$table) {
             $this->warn('  Tabla: sin resolver');
-            if (! empty($ambiguous)) {
-                $this->warn('  Coincidencias posibles: '.implode(', ', $ambiguous));
+            if (!empty($ambiguous)) {
+                $this->warn('  Coincidencias posibles: ' . implode(', ', $ambiguous));
             }
             continue;
         }
 
-        $this->line('  Tabla: '.$table);
-        if (! Schema::hasTable($table)) {
+        $this->line('  Tabla: ' . $table);
+        if (!Schema::hasTable($table)) {
             $this->error('  La tabla no existe en la BD.');
             continue;
         }
@@ -1340,7 +1367,7 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
                 continue;
             }
             $dbNormalized[] = $n;
-            if (! array_key_exists($n, $dbMap)) {
+            if (!array_key_exists($n, $dbMap)) {
                 $dbMap[$n] = $c;
             }
         }
@@ -1351,20 +1378,20 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
         $requiredColumns = [];
         if ($driver === 'mysql') {
             $requiredColumns = array_values(array_map(
-                static fn ($r) => $r->column_name,
+                static fn($r) => $r->column_name,
                 DB::table('information_schema.columns')
                     ->select('column_name', 'is_nullable', 'column_default', 'extra')
                     ->where('table_schema', $dbName)
                     ->where('table_name', $table)
                     ->where('is_nullable', 'NO')
                     ->get()
-                    ->filter(static fn ($r) => $r->column_default === null && ! str_contains((string) ($r->extra ?? ''), 'auto_increment'))
+                    ->filter(static fn($r) => $r->column_default === null && !str_contains((string) ($r->extra ?? ''), 'auto_increment'))
                     ->all()
             ));
         } elseif ($driver === 'sqlite') {
             $rows = DB::select("PRAGMA table_info('{$table}')");
             foreach ($rows as $r) {
-                if (! empty($r->notnull) && ($r->dflt_value ?? null) === null) {
+                if (!empty($r->notnull) && ($r->dflt_value ?? null) === null) {
                     $requiredColumns[] = $r->name;
                 }
             }
@@ -1383,25 +1410,25 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
         $requiredNormalized = array_values(array_unique(array_map($normalizeCol, $requiredColumns)));
         $requiredMissingHeaders = array_values(array_diff($requiredNormalized, array_keys($csvNormalized)));
 
-        if (! empty($missingInDb)) {
-            $this->warn('  Columnas en CSV no presentes en BD: '.implode(', ', $missingInDb));
+        if (!empty($missingInDb)) {
+            $this->warn('  Columnas en CSV no presentes en BD: ' . implode(', ', $missingInDb));
         }
-        if (! empty($missingInCsv)) {
-            $this->warn('  Columnas en BD no presentes en CSV: '.implode(', ', $missingInCsv));
+        if (!empty($missingInCsv)) {
+            $this->warn('  Columnas en BD no presentes en CSV: ' . implode(', ', $missingInCsv));
         }
-        if (! empty($duplicates)) {
-            $this->warn('  Encabezados duplicados: '.implode(', ', array_keys($duplicates)));
+        if (!empty($duplicates)) {
+            $this->warn('  Encabezados duplicados: ' . implode(', ', array_keys($duplicates)));
         }
         if ($emptyHeaders > 0) {
-            $this->warn('  Encabezados vacíos: '.$emptyHeaders);
+            $this->warn('  Encabezados vacíos: ' . $emptyHeaders);
         }
-        if (! empty($requiredMissingHeaders)) {
-            $this->error('  Faltan columnas obligatorias en el CSV: '.implode(', ', $requiredMissingHeaders));
+        if (!empty($requiredMissingHeaders)) {
+            $this->error('  Faltan columnas obligatorias en el CSV: ' . implode(', ', $requiredMissingHeaders));
             continue;
         }
 
         $shouldMigrate = $autoYes ? true : $this->confirm('  ¿Migrar este CSV?', false);
-        if (! $shouldMigrate) {
+        if (!$shouldMigrate) {
             $this->line('  Saltado.');
             continue;
         }
@@ -1417,24 +1444,7 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
         $batch = [];
         $isTransactionTable = false;
 
-        $importFn = function () use (
-            $table,
-            $isTransactionTable,
-            $file,
-            $delimiter,
-            $sheet,
-            $highestCol,
-            $highestRow,
-            $normalizeCol,
-            $dbMap,
-            $requiredColumns,
-            $headers,
-            $limit,
-            &$rowCount,
-            &$imported,
-            &$skipped,
-            &$batch
-        ): void {
+        $importFn = function () use ($table, $isTransactionTable, $file, $delimiter, $sheet, $highestCol, $highestRow, $normalizeCol, $dbMap, $requiredColumns, $headers, $limit, &$rowCount, &$imported, &$skipped, &$batch): void {
             if ($isTransactionTable) {
                 DB::table($table)->delete();
             } else {
@@ -1443,11 +1453,11 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
 
             $headerIndex = [];
             foreach ($headers as $i => $h) {
-                if (! is_string($h)) {
+                if (!is_string($h)) {
                     continue;
                 }
                 $normalized = $normalizeCol($h);
-                if ($normalized === '' || ! isset($dbMap[$normalized])) {
+                if ($normalized === '' || !isset($dbMap[$normalized])) {
                     continue;
                 }
                 $headerIndex[$i] = $dbMap[$normalized];
@@ -1458,7 +1468,7 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
                     if ($limit > 0 && $rowCount >= $limit) {
                         break;
                     }
-                    $row = $sheet->rangeToArray('A'.$r.':'.$highestCol.$r, null, true, false)[0] ?? [];
+                    $row = $sheet->rangeToArray('A' . $r . ':' . $highestCol . $r, null, true, false)[0] ?? [];
                     $rowCount++;
                     $data = [];
                     foreach ($headerIndex as $idx => $col) {
@@ -1483,7 +1493,7 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
                             break;
                         }
                     }
-                    if (! $hasData) {
+                    if (!$hasData) {
                         continue;
                     }
                     $batch[] = $data;
@@ -1500,7 +1510,7 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
                 }
                 $headerSkipped = false;
                 while (($row = fgetcsv($fh, 0, $delimiter)) !== false) {
-                    if (! $headerSkipped) {
+                    if (!$headerSkipped) {
                         $headerSkipped = true;
                         continue;
                     }
@@ -1531,7 +1541,7 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
                             break;
                         }
                     }
-                    if (! $hasData) {
+                    if (!$hasData) {
                         continue;
                     }
                     $batch[] = $data;
@@ -1544,7 +1554,7 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
                 fclose($fh);
             }
 
-            if (! empty($batch)) {
+            if (!empty($batch)) {
                 DB::table($table)->insert($batch);
                 $imported += count($batch);
                 $batch = [];
@@ -1557,7 +1567,7 @@ Artisan::command('csv:migrate {--dir=} {--dry-run} {--yes} {--limit=0}', functio
             $importFn();
         }
 
-        $this->info('  Importadas filas: '.$imported.' (leídas: '.$rowCount.', saltadas: '.$skipped.').');
+        $this->info('  Importadas filas: ' . $imported . ' (leídas: ' . $rowCount . ', saltadas: ' . $skipped . ').');
     }
 
     return 0;
@@ -1569,7 +1579,7 @@ Artisan::command('inconsistencias:acciones {--out=}', function () {
         $outPath = storage_path('app/inconsistencias_acciones.csv');
     }
     $dir = dirname($outPath);
-    if (! is_dir($dir)) {
+    if (!is_dir($dir)) {
         @mkdir($dir, 0775, true);
     }
 
@@ -1620,7 +1630,7 @@ Artisan::command('inconsistencias:acciones {--out=}', function () {
 
     $detallesByAccion = [];
     foreach ($detalleRows as $d) {
-        if (! $detalleAccionCol) {
+        if (!$detalleAccionCol) {
             continue;
         }
         $accionId = trim((string) ($d->{$detalleAccionCol} ?? ''));
@@ -1632,7 +1642,7 @@ Artisan::command('inconsistencias:acciones {--out=}', function () {
 
     $fh = fopen($outPath, 'wb');
     if ($fh === false) {
-        $this->error('No se pudo abrir el archivo de salida: '.$outPath);
+        $this->error('No se pudo abrir el archivo de salida: ' . $outPath);
         return 1;
     }
 
@@ -1680,7 +1690,7 @@ Artisan::command('inconsistencias:acciones {--out=}', function () {
                 $issues[] = 'SIN_CANALES';
             }
 
-            if (! empty($issues)) {
+            if (!empty($issues)) {
                 fputcsv($fh, [
                     $accionId,
                     $accionCod,
@@ -1696,8 +1706,8 @@ Artisan::command('inconsistencias:acciones {--out=}', function () {
     }
 
     fclose($fh);
-    $this->info('CSV generado: '.$outPath);
-    $this->info('Inconsistencias detectadas: '.$totalIssues);
+    $this->info('CSV generado: ' . $outPath);
+    $this->info('Inconsistencias detectadas: ' . $totalIssues);
 
     return 0;
 })->purpose('Exporta inconsistencias de acciones operativas a CSV');
