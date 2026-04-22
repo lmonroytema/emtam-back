@@ -14,6 +14,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\RateLimiter;
@@ -25,6 +26,7 @@ use Illuminate\Validation\ValidationException;
 class ActivationController extends Controller
 {
     private array $tenantTimezoneCache = [];
+    private array $passwordResetUrlCache = [];
 
     public function __construct(
         private readonly TenantContext $tenantContext,
@@ -1062,6 +1064,7 @@ class ActivationController extends Controller
         }
         $emailSubject = $subjectPrefix.$planName;
         $emailBody = ($notificationMessage !== '' ? $notificationMessage : '')."\n";
+        $includeCredentials = (bool) ($tenant?->notifications_include_credentials ?? false);
         $escapeHtml = static fn ($value) => htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
         $buildActionsByTipo = static function (array $acciones): array {
             $accionesByTipo = [
@@ -1173,6 +1176,12 @@ class ActivationController extends Controller
                 $emailError = '';
 
                 $body = $emailBody;
+                if ($includeCredentials) {
+                    $credentialsLines = $this->buildCredentialsLines($tenant, $to !== '' ? $to : null);
+                    if (! empty($credentialsLines)) {
+                        $body = rtrim($body)."\n\n".implode("\n", $credentialsLines)."\n";
+                    }
+                }
                 $bodyHtml = '<div style="font-family: Arial, sans-serif; font-size: 14px; color: #111; line-height: 1.6;">'
                     .'<div style="font-size: 16px; font-weight: 700; margin-bottom: 12px;">'.$escapeHtml($subject).'</div>'
                     .($notificationMessage !== ''
@@ -1185,6 +1194,15 @@ class ActivationController extends Controller
                     .'</div>'
                     .'<div style="font-size: 12px; color: #666;">'.$escapeHtml($modoLabel).'</div>'
                     .'</div>';
+                if ($includeCredentials) {
+                    $credentialsLines = $this->buildCredentialsLines($tenant, $to !== '' ? $to : null);
+                    if (! empty($credentialsLines)) {
+                        $bodyHtml .= '<div style="margin-top: 12px; padding: 10px 12px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fafafa;">'
+                            .'<div style="font-weight: 600; margin-bottom: 6px;">Credenciales de acceso</div>'
+                            .$this->renderNotificationHtml(implode("\n", $credentialsLines))
+                            .'</div>';
+                    }
+                }
 
                 if ($mode === 'file') {
                     $safeTarget = $to !== '' ? $to : (string) ($p['per_id'] ?? 'persona');
@@ -1326,6 +1344,12 @@ class ActivationController extends Controller
             $subject = $emailSubject;
             foreach ($testEmails as $testEmail) {
                 $body = $emailBody;
+                if ($includeCredentials) {
+                    $credentialsLines = $this->buildCredentialsLines($tenant, $testEmail);
+                    if (! empty($credentialsLines)) {
+                        $body = rtrim($body)."\n\n".implode("\n", $credentialsLines)."\n";
+                    }
+                }
                 $bodyHtml = '<div style="font-family: Arial, sans-serif; font-size: 14px; color: #111; line-height: 1.6;">'
                     .'<div style="font-size: 16px; font-weight: 700; margin-bottom: 12px;">'.$escapeHtml($subject).'</div>'
                     .($notificationMessage !== ''
@@ -1337,6 +1361,15 @@ class ActivationController extends Controller
                     .'</div>'
                     .'<div style="font-size: 12px; color: #666;">'.$escapeHtml($modoLabel).'</div>'
                     .'</div>';
+                if ($includeCredentials) {
+                    $credentialsLines = $this->buildCredentialsLines($tenant, $testEmail);
+                    if (! empty($credentialsLines)) {
+                        $bodyHtml .= '<div style="margin-top: 12px; padding: 10px 12px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fafafa;">'
+                            .'<div style="font-weight: 600; margin-bottom: 6px;">Credenciales de acceso</div>'
+                            .$this->renderNotificationHtml(implode("\n", $credentialsLines))
+                            .'</div>';
+                    }
+                }
 
                 if ($mode === 'file') {
                     $safe = preg_replace('/[^A-Za-z0-9._-]+/', '_', $testEmail) ?: 'test';
@@ -1460,6 +1493,7 @@ class ActivationController extends Controller
                 $whatsappTargets[$phone] = [
                     'per_id' => (string) ($p['per_id'] ?? ''),
                     'nombre' => (string) ($p['nombre'] ?? ''),
+                    'email' => strtolower(trim((string) ($p['email'] ?? ''))),
                     'phone' => $phone,
                 ];
             }
@@ -1483,17 +1517,24 @@ class ActivationController extends Controller
                 if ($phone === '') {
                     continue;
                 }
+                $messageForTarget = $whatsappMessage;
+                if ($includeCredentials) {
+                    $credentialsLines = $this->buildCredentialsLines($tenant, (string) ($target['email'] ?? ''));
+                    if (! empty($credentialsLines)) {
+                        $messageForTarget = trim($messageForTarget."\n\n".implode("\n", $credentialsLines));
+                    }
+                }
                 if ($mode === 'file') {
                     $safe = preg_replace('/[^A-Za-z0-9._-]+/', '_', $phone) ?: 'whatsapp';
                     $path = 'notifications_outbox/'.$tenantId.'/'.$activationId.'/'.$ts.'-whatsapp-'.$safe.'.txt';
-                    Storage::disk('local')->put($path, $whatsappMessage."\n");
+                    Storage::disk('local')->put($path, $messageForTarget."\n");
                     $whatsappFilesWritten++;
                     continue;
                 }
                 if (! $whatsappNotificationsEnabled) {
                     continue;
                 }
-                $wa = $this->sendWhatsappText($tenantId, $phone, $whatsappMessage, [
+                $wa = $this->sendWhatsappText($tenantId, $phone, $messageForTarget, [
                     'activation_id' => $activationId,
                     'per_id' => $target['per_id'] ?? null,
                     'nombre' => $target['nombre'] ?? null,
@@ -1521,6 +1562,7 @@ class ActivationController extends Controller
                 $smsTargets[$phone] = [
                     'per_id' => (string) ($p['per_id'] ?? ''),
                     'nombre' => (string) ($p['nombre'] ?? ''),
+                    'email' => strtolower(trim((string) ($p['email'] ?? ''))),
                     'phone' => $phone,
                 ];
             }
@@ -1544,17 +1586,24 @@ class ActivationController extends Controller
                 if ($phone === '') {
                     continue;
                 }
+                $messageForTarget = $smsMessage;
+                if ($includeCredentials) {
+                    $credentialsLines = $this->buildCredentialsLines($tenant, (string) ($target['email'] ?? ''));
+                    if (! empty($credentialsLines)) {
+                        $messageForTarget = trim($messageForTarget."\n\n".implode("\n", $credentialsLines));
+                    }
+                }
                 if ($mode === 'file') {
                     $safe = preg_replace('/[^A-Za-z0-9._-]+/', '_', $phone) ?: 'sms';
                     $path = 'notifications_outbox/'.$tenantId.'/'.$activationId.'/'.$ts.'-sms-'.$safe.'.txt';
-                    Storage::disk('local')->put($path, $smsMessage."\n");
+                    Storage::disk('local')->put($path, $messageForTarget."\n");
                     $smsFilesWritten++;
                     continue;
                 }
                 if (! ((bool) ($channels['sms_enabled'] ?? false))) {
                     continue;
                 }
-                $sms = $this->sendSmsText($tenantId, $phone, $smsMessage, [
+                $sms = $this->sendSmsText($tenantId, $phone, $messageForTarget, [
                     'activation_id' => $activationId,
                     'per_id' => $target['per_id'] ?? null,
                     'nombre' => $target['nombre'] ?? null,
@@ -1677,6 +1726,7 @@ class ActivationController extends Controller
         $channels = $this->resolveNotificationChannels($tenant);
         $emailNotificationsEnabled = (bool) ($channels['email_enabled'] ?? false);
         $whatsappNotificationsEnabled = (bool) ($channels['whatsapp_enabled'] ?? false);
+        $includeCredentials = (bool) ($tenant?->notifications_include_credentials ?? false);
         $modeLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
         $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
 
@@ -1818,6 +1868,15 @@ class ActivationController extends Controller
             .'</div>'
             .'<div style="font-size: 12px; color: #666;">'.$escapeHtml($modeLabel).'</div>'
             .'</div>';
+        if ($includeCredentials) {
+            $credentialsLines = $this->buildCredentialsLines($tenant, null);
+            if (! empty($credentialsLines)) {
+                $bodyHtml .= '<div style="margin-top: 12px; padding: 10px 12px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fafafa;">'
+                    .'<div style="font-weight: 600; margin-bottom: 6px;">Credenciales de acceso</div>'
+                    .$this->renderNotificationHtml(implode("\n", $credentialsLines))
+                    .'</div>';
+            }
+        }
 
         $mode = $this->resolveNotificationMode();
         $sent = 0;
@@ -1964,6 +2023,7 @@ class ActivationController extends Controller
         $channels = $this->resolveNotificationChannels($tenant);
         $emailNotificationsEnabled = (bool) ($channels['email_enabled'] ?? false);
         $whatsappNotificationsEnabled = (bool) ($channels['whatsapp_enabled'] ?? false);
+        $includeCredentials = (bool) ($tenant?->notifications_include_credentials ?? false);
         $modeLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
         $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
         $simPrefix = $isSimulacro ? '[SIMULACRO] ' : '';
@@ -2163,6 +2223,15 @@ class ActivationController extends Controller
             .'<div>En este nivel no se generan acciones operativas.</div>'
             .'<div style="font-size: 12px; color: #666; margin-top: 10px;">'.$escapeHtml($modeLabel).'</div>'
             .'</div>';
+        if ($includeCredentials) {
+            $credentialsLines = $this->buildCredentialsLines($tenant, null);
+            if (! empty($credentialsLines)) {
+                $bodyHtml .= '<div style="margin-top: 12px; padding: 10px 12px; border: 1px solid #e5e5e5; border-radius: 8px; background: #fafafa;">'
+                    .'<div style="font-weight: 600; margin-bottom: 6px;">Credenciales de acceso</div>'
+                    .$this->renderNotificationHtml(implode("\n", $credentialsLines))
+                    .'</div>';
+            }
+        }
 
         $mode = $this->resolveNotificationMode();
         $sent = 0;
@@ -2311,6 +2380,7 @@ class ActivationController extends Controller
         $channels = $this->resolveNotificationChannels($tenant);
         $emailNotificationsEnabled = (bool) ($channels['email_enabled'] ?? false);
         $whatsappNotificationsEnabled = (bool) ($channels['whatsapp_enabled'] ?? false);
+        $includeCredentials = (bool) ($tenant?->notifications_include_credentials ?? false);
         $mode = $this->resolveNotificationMode();
 
         $groupName = '';
@@ -2389,6 +2459,12 @@ class ActivationController extends Controller
             .($groupName !== '' ? "Grupo operativo: {$groupName}\n" : '')
             ."Plan activado: {$activationId}\n"
             .'Accede a la aplicación: https://emta.grupo-tema.com/';
+        if ($includeCredentials) {
+            $credentialsLines = $this->buildCredentialsLines($tenant, $personEmail !== '' ? $personEmail : null);
+            if (! empty($credentialsLines)) {
+                $text = rtrim($text)."\n\n".implode("\n", $credentialsLines);
+            }
+        }
         $bodyHtml = $this->renderNotificationHtml($text);
 
         $sent = 0;
@@ -2497,6 +2573,76 @@ class ActivationController extends Controller
             $escaped,
         ) ?? $escaped;
         return nl2br($withLinks);
+    }
+
+    private function buildCredentialsLines(?Tenant $tenant, ?string $email = null): array
+    {
+        $enabled = (bool) ($tenant?->notifications_include_credentials ?? false);
+        if (! $enabled) {
+            return [];
+        }
+
+        $frontendUrl = rtrim((string) env('FRONTEND_URL', config('app.url')), '/');
+        $loginUrl = $frontendUrl !== '' ? $frontendUrl.'/' : '';
+        $normalizedEmail = strtolower(trim((string) ($email ?? '')));
+        $lines = [];
+        $resetUrl = '';
+        $tenantId = trim((string) ($tenant?->tenant_id ?? ''));
+
+        if ($normalizedEmail !== '' && filter_var($normalizedEmail, FILTER_VALIDATE_EMAIL) && $tenantId !== '' && Schema::hasTable('password_reset_tokens')) {
+            $cacheKey = $tenantId.'|'.$normalizedEmail;
+            $resetUrl = (string) ($this->passwordResetUrlCache[$cacheKey] ?? '');
+            if ($resetUrl === '') {
+                $userExists = User::query()
+                    ->where('tenant_id', $tenantId)
+                    ->where('email', $normalizedEmail)
+                    ->exists();
+                if ($userExists) {
+                    $token = Str::random(64);
+                    $resetQuery = DB::table('password_reset_tokens')->where('email', $normalizedEmail);
+                    if (Schema::hasColumn('password_reset_tokens', 'tenant_id')) {
+                        $resetQuery->where('tenant_id', $tenantId);
+                    }
+                    $resetQuery->delete();
+
+                    $insert = [
+                        'email' => $normalizedEmail,
+                        'token' => Hash::make($token),
+                        'created_at' => now(),
+                    ];
+                    if (Schema::hasColumn('password_reset_tokens', 'tenant_id')) {
+                        $insert['tenant_id'] = $tenantId;
+                    }
+                    DB::table('password_reset_tokens')->insert($insert);
+
+                    $query = [
+                        'token' => $token,
+                        'email' => $normalizedEmail,
+                    ];
+                    if ($tenantId !== '') {
+                        $query['tenantId'] = $tenantId;
+                    }
+                    $resetUrl = rtrim($frontendUrl, '/').'/reset-password?'.http_build_query($query);
+                    $this->passwordResetUrlCache[$cacheKey] = $resetUrl;
+                }
+            }
+        }
+
+        if ($resetUrl !== '') {
+            $lines[] = 'Acceso inicial / restablecer contraseña: '.$resetUrl;
+        } elseif ($loginUrl !== '') {
+            $lines[] = 'Accede a la aplicación: '.$loginUrl;
+        }
+        if ($normalizedEmail !== '' && filter_var($normalizedEmail, FILTER_VALIDATE_EMAIL)) {
+            $lines[] = 'Usuario: '.$normalizedEmail;
+        }
+        if ($resetUrl !== '') {
+            $lines[] = 'Define tu clave desde el enlace anterior.';
+        } else {
+            $lines[] = 'Contraseña: la habitual de acceso.';
+        }
+
+        return $lines;
     }
 
     private function postWhatsappWebhook(string $webhookUrl, array $payload): HttpClientResponse
@@ -2834,6 +2980,7 @@ class ActivationController extends Controller
         $channels = $this->resolveNotificationChannels($tenant);
         $emailNotificationsEnabled = (bool) ($channels['email_enabled'] ?? false);
         $whatsappNotificationsEnabled = (bool) ($channels['whatsapp_enabled'] ?? false);
+        $includeCredentials = (bool) ($tenant?->notifications_include_credentials ?? false);
         $modoLabel = $productionMode ? 'PRODUCCION' : 'PRUEBA';
         $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
         $testEmails = [];
@@ -2924,6 +3071,16 @@ class ActivationController extends Controller
                 $lines[] = '';
                 $lines[] = 'DETALLE:';
                 $lines[] = $detalle;
+            }
+            if ($includeCredentials) {
+                $credentialsLines = $this->buildCredentialsLines($tenant, $to !== '' ? $to : null);
+                if (! empty($credentialsLines)) {
+                    $lines[] = '';
+                    $lines[] = 'CREDENCIALES DE ACCESO:';
+                    foreach ($credentialsLines as $line) {
+                        $lines[] = $line;
+                    }
+                }
             }
             $body = implode("\n", $lines)."\n";
 
@@ -3023,6 +3180,12 @@ class ActivationController extends Controller
             }
         }
         $whatsappMessage = $subject.($detalle !== '' ? "\n\n".$detalle : '');
+        if ($includeCredentials) {
+            $credentialsLines = $this->buildCredentialsLines($tenant, null);
+            if (! empty($credentialsLines)) {
+                $whatsappMessage = trim($whatsappMessage."\n\n".implode("\n", $credentialsLines));
+            }
+        }
         foreach (array_keys($whatsappTargets) as $phone) {
             if ($mode === 'file') {
                 $safe = preg_replace('/[^A-Za-z0-9._-]+/', '_', $phone) ?: 'whatsapp';
@@ -3648,7 +3811,72 @@ class ActivationController extends Controller
             return response()->json(['message' => 'Invalid payload.'], 422);
         }
 
-        $this->auditLogger->logFromRequest($request, [
+        $accionDetalleIds = array_values(array_filter(array_map(
+            static fn ($v) => trim((string) $v),
+            explode(',', $accionDetalleId),
+        ), static fn ($v) => $v !== ''));
+
+        $accionDetalles = collect();
+        if (! empty($accionDetalleIds) && Schema::hasTable('accion_set_detalle_cfg')) {
+            $detalleQuery = DB::table('accion_set_detalle_cfg')
+                ->whereIn('ac_se_de-id', $accionDetalleIds);
+            if (Schema::hasColumn('accion_set_detalle_cfg', 'ac_se_de-tenant_id')) {
+                $detalleQuery->where('ac_se_de-tenant_id', $tenantId);
+            }
+            $accionDetalles = $detalleQuery->get(['ac_se_de-id', 'ac_se_de-detalle', 'ac_se_de-rol_id-fk']);
+        }
+
+        $roleIds = [];
+        $actionNames = [];
+        foreach ($accionDetalles as $detalleRow) {
+            $detailRoleId = trim((string) ($detalleRow->{'ac_se_de-rol_id-fk'} ?? ''));
+            if ($detailRoleId !== '') {
+                $roleIds[] = $detailRoleId;
+            }
+            $detailName = trim((string) ($detalleRow->{'ac_se_de-detalle'} ?? ''));
+            if ($detailName !== '') {
+                $actionNames[] = $detailName;
+            }
+        }
+        $roleIds = array_values(array_unique($roleIds));
+        $actionNames = array_values(array_unique($actionNames));
+
+        $roleNamesById = [];
+        if (! empty($roleIds) && Schema::hasTable('rol_cat')) {
+            $roleQuery = DB::table('rol_cat')->whereIn('rol-id', $roleIds);
+            if (Schema::hasColumn('rol_cat', 'rol-tenant_id')) {
+                $roleQuery->where('rol-tenant_id', $tenantId);
+            }
+            foreach ($roleQuery->get(['rol-id', 'rol-nombre']) as $roleRow) {
+                $rid = trim((string) ($roleRow->{'rol-id'} ?? ''));
+                if ($rid !== '') {
+                    $roleNamesById[$rid] = trim((string) ($roleRow->{'rol-nombre'} ?? ''));
+                }
+            }
+        }
+
+        $suplenteNewNombre = null;
+        if (Schema::hasTable('persona_mst')) {
+            $personaNew = DB::table('persona_mst')
+                ->where('per-id', $suplenteNew)
+                ->when(
+                    Schema::hasColumn('persona_mst', 'per-tenant_id'),
+                    static fn ($q) => $q->where('per-tenant_id', $tenantId),
+                )
+                ->first(['per-nombre', 'per-apellido_1', 'per-apellido_2']);
+            if ($personaNew) {
+                $suplenteNewNombre = trim(implode(' ', array_filter([
+                    (string) ($personaNew->{'per-nombre'} ?? ''),
+                    (string) ($personaNew->{'per-apellido_1'} ?? ''),
+                    (string) ($personaNew->{'per-apellido_2'} ?? ''),
+                ])));
+            }
+        }
+
+        $this->auditLogger->log([
+            'tenant_id' => $tenantId,
+            'user_id' => null,
+            'ip_origin' => $request->ip(),
             'event_type' => 'delegation_auto',
             'module' => 'delegations',
             'plan_id' => $activationId,
@@ -3662,7 +3890,13 @@ class ActivationController extends Controller
             ],
             'new_value' => [
                 'suplente_new_per_id' => $suplenteNew,
+                'suplente_new_nombre' => $suplenteNewNombre,
                 'asignacion_id' => $asignacionId !== '' ? $asignacionId : null,
+                'accion_detalle_ids' => ! empty($accionDetalleIds) ? $accionDetalleIds : null,
+                'accion_detalle_nombre' => ! empty($actionNames) ? implode(', ', $actionNames) : null,
+                'rol_id' => $roleIds[0] ?? null,
+                'rol_nombre' => isset($roleIds[0]) ? ($roleNamesById[$roleIds[0]] ?? $roleIds[0]) : null,
+                'actor' => 'APP',
                 'tipo_delegacion' => 'AUTO',
                 'motivo' => $motivo !== '' ? $motivo : 'Vencimiento tiempo conformación',
             ],

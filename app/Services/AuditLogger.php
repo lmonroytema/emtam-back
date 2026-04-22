@@ -2,7 +2,9 @@
 
 namespace App\Services;
 
+use App\Models\Tenant;
 use App\Models\User;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -10,6 +12,9 @@ use Illuminate\Support\Str;
 
 class AuditLogger
 {
+    /** @var array<string, string> */
+    private array $tenantTimezoneCache = [];
+
     public function __construct(private readonly TenantContext $tenantContext)
     {
     }
@@ -38,7 +43,7 @@ class AuditLogger
             'new_value' => isset($payload['new_value']) ? json_encode($payload['new_value']) : null,
             'justification' => $payload['justification'] ?? null,
             'ip_origin' => $payload['ip_origin'] ?? null,
-            'created_at' => $payload['created_at'] ?? now()->toDateTimeString(),
+            'created_at' => $this->resolveCreatedAt($payload, $tenantId),
         ]);
     }
 
@@ -59,5 +64,42 @@ class AuditLogger
             'user_id' => $user?->id,
             'ip_origin' => $ip,
         ], $payload));
+    }
+
+    private function resolveCreatedAt(array $payload, string $tenantId): string
+    {
+        $createdAt = $payload['created_at'] ?? null;
+        if (is_string($createdAt) && trim($createdAt) !== '') {
+            return $createdAt;
+        }
+
+        return Carbon::now($this->resolveTenantTimezone($tenantId))->toDateTimeString();
+    }
+
+    private function resolveTenantTimezone(string $tenantId): string
+    {
+        $defaultTimezone = (string) config('app.timezone', 'UTC');
+
+        if ($tenantId === '') {
+            return $defaultTimezone;
+        }
+
+        if (isset($this->tenantTimezoneCache[$tenantId])) {
+            return $this->tenantTimezoneCache[$tenantId];
+        }
+
+        $timezone = trim((string) (
+            Tenant::query()
+                ->where('tenant_id', $tenantId)
+                ->value('timezone')
+        ));
+
+        if ($timezone === '' || ! in_array($timezone, timezone_identifiers_list(), true)) {
+            $timezone = $defaultTimezone;
+        }
+
+        $this->tenantTimezoneCache[$tenantId] = $timezone;
+
+        return $timezone;
     }
 }
