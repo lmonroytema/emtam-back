@@ -369,9 +369,24 @@ class AuthController extends Controller
             if (! empty($recipients)) {
                 $subjectPrefix = $productionMode ? '' : '[PRUEBA] ';
                 $subject = $subjectPrefix.__('messages.auth.password_reset_subject');
-                $body = __('messages.auth.password_reset_email', ['url' => $resetUrl]);
+                $intro = __('messages.auth.password_reset_email_intro');
+                $cta = __('messages.auth.password_reset_email_cta');
+                $ignore = __('messages.auth.password_reset_email_ignore');
+                $safeUrl = htmlspecialchars($resetUrl, ENT_QUOTES, 'UTF-8');
+                $safeIntro = htmlspecialchars($intro, ENT_QUOTES, 'UTF-8');
+                $safeCta = htmlspecialchars($cta, ENT_QUOTES, 'UTF-8');
+                $safeIgnore = htmlspecialchars($ignore, ENT_QUOTES, 'UTF-8');
+                $htmlBody = '<div style="font-family:Arial,sans-serif;font-size:14px;color:#111;line-height:1.6;">'
+                    .'<p style="margin:0 0 14px;">'.$safeIntro.'</p>'
+                    .'<p style="margin:0 0 14px;">'
+                    .'<a href="'.$safeUrl.'" style="display:inline-block;background:#a91023;color:#fff;text-decoration:none;padding:10px 16px;border-radius:8px;font-weight:700;">'
+                    .$safeCta
+                    .'</a>'
+                    .'</p>'
+                    .'<p style="margin:0;color:#555;">'.$safeIgnore.'</p>'
+                    .'</div>';
                 foreach ($recipients as $to) {
-                    Mail::raw($body, static function ($message) use ($to, $subject) {
+                    Mail::html($htmlBody, static function ($message) use ($to, $subject) {
                         $message->to($to)->subject($subject);
                     });
                 }

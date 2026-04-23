@@ -5835,10 +5835,41 @@ class ActivationController extends Controller
             'ca' => 'Accés al panell de control compartit',
             'en' => 'Shared control panel access',
         ];
+        $activationRow = DB::table('activacion_del_plan_trs')
+            ->when(
+                Schema::hasColumn('activacion_del_plan_trs', 'ac_de_pl-tenant_id'),
+                static fn ($q) => $q->where('ac_de_pl-tenant_id', $tenantId),
+            )
+            ->where('ac_de_pl-id', $activationId)
+            ->first(['ac_de_pl-rie_id-fk', 'ac_de_pl-ni_al_id-fk-inicial']);
+        $riskId = trim((string) ($activationRow->{'ac_de_pl-rie_id-fk'} ?? ''));
+        $levelId = trim((string) ($activationRow->{'ac_de_pl-ni_al_id-fk-inicial'} ?? ''));
+        $riskLabel = $riskId;
+        $levelLabel = $levelId;
+        if ($riskId !== '' && Schema::hasTable('riesgo_cat')) {
+            $risk = DB::table('riesgo_cat')
+                ->when(
+                    Schema::hasColumn('riesgo_cat', 'rie-tenant_id'),
+                    static fn ($q) => $q->where('rie-tenant_id', $tenantId),
+                )
+                ->where('rie-id', $riskId)
+                ->first(['rie-nombre']);
+            $riskLabel = trim((string) ($risk->{'rie-nombre'} ?? $riskId));
+        }
+        if ($levelId !== '' && Schema::hasTable('nivel_alerta_cat')) {
+            $level = DB::table('nivel_alerta_cat')
+                ->when(
+                    Schema::hasColumn('nivel_alerta_cat', 'ni_al-tenant_id'),
+                    static fn ($q) => $q->where('ni_al-tenant_id', $tenantId),
+                )
+                ->where('ni_al-id', $levelId)
+                ->first(['ni_al-nombre']);
+            $levelLabel = trim((string) ($level->{'ni_al-nombre'} ?? $levelId));
+        }
         $line1ByLang = [
-            'es' => "Se te ha concedido acceso al panel de control para la activación {$activationId}.",
-            'ca' => "Se t'ha concedit accés al panell de control per a l'activació {$activationId}.",
-            'en' => "You have been granted access to the control panel for activation {$activationId}.",
+            'es' => "Se te ha concedido acceso al panel de control. Riesgo: {$riskLabel}. Nivel: {$levelLabel}.",
+            'ca' => "Se t'ha concedit accés al panell de control. Risc: {$riskLabel}. Nivell: {$levelLabel}.",
+            'en' => "You have been granted control panel access. Risk: {$riskLabel}. Level: {$levelLabel}.",
         ];
         $line2ByLang = [
             'es' => "Vence: {$expiresAt}",
