@@ -1718,6 +1718,28 @@ class ActivationController extends Controller
             return response()->json(['message' => 'Invalid request.'], 422);
         }
 
+        // Business rule: for NORMALIDAD level, no user notifications should be sent.
+        return response()->json([
+            'message' => 'Notificaciones omitidas para nivel Normalidad.',
+            'mode' => $this->resolveNotificationMode(),
+            'sent' => 0,
+            'files_written' => 0,
+            'recipients' => 0,
+            'recipient_emails' => [],
+            'sent_recipient_emails' => [],
+            'failed_recipients' => [],
+            'whatsapp_sent' => 0,
+            'whatsapp_files_written' => 0,
+            'whatsapp_recipients' => 0,
+            'sms_sent' => 0,
+            'sms_files_written' => 0,
+            'sms_recipients' => 0,
+            'warnings' => ['No se envían notificaciones en Normalidad.'],
+            'debug' => [
+                'skipped_normalidad' => true,
+            ],
+        ]);
+
         $tenant = Tenant::query()->firstOrCreate(
             ['tenant_id' => $tenantId],
             ['name' => $tenantId, 'default_language' => 'es'],
@@ -2079,6 +2101,33 @@ class ActivationController extends Controller
         }
 
         $nivelUpper = strtoupper($nivelNombre !== '' ? $nivelNombre : (string) $nivelLabel);
+        $isNormalidad = ($nivelUpper !== '' && str_contains($nivelUpper, 'NORMALIDAD'))
+            || in_array($nivelCod, ['NORMALIDAD', 'NORMAL', 'NOR'], true);
+        if ($isNormalidad) {
+            return response()->json([
+                'message' => 'Notificaciones omitidas para nivel Normalidad.',
+                'mode' => $this->resolveNotificationMode(),
+                'sent' => 0,
+                'files_written' => 0,
+                'recipients' => 0,
+                'recipient_emails' => [],
+                'sent_recipient_emails' => [],
+                'failed_recipients' => [],
+                'whatsapp_sent' => 0,
+                'whatsapp_files_written' => 0,
+                'whatsapp_recipients' => 0,
+                'sms_sent' => 0,
+                'sms_files_written' => 0,
+                'sms_recipients' => 0,
+                'warnings' => ['No se envían notificaciones en Normalidad.'],
+                'debug' => [
+                    'skipped_normalidad' => true,
+                    'nivel_cod' => $nivelCod,
+                    'nivel_nombre' => $nivelNombre,
+                    'nivel_label' => $nivelLabel,
+                ],
+            ]);
+        }
         $isAviso = $nivelUpper !== '' && (str_contains($nivelUpper, 'AVISO') || $nivelCod === 'AVISO' || $nivelCod === 'AV' || str_starts_with($nivelCod, 'AV'));
         $isPrealerta = $nivelUpper !== '' && (str_contains($nivelUpper, 'PREALERTA') || str_starts_with($nivelCod, 'P'));
         $scenarioLabel = $isPrealerta ? 'Prealerta' : ($isAviso ? 'Aviso' : 'Resumen');
